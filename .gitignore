@@ -1,0 +1,43 @@
+# Teoría del curso: no forma parte de la entrega
+teoria/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Entorno y secretos
+.env
+.env.*
+!.env.example
+
+# Docker y datos locales
+*.log
+correccion/corridas/
+datos/
+volumenes/
+volumes/
+
+# Audio y modelos pesados
+*.wav
+*.mp3
+*.onnx
+*.bin
+
+# IDE y sistema operativo
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
