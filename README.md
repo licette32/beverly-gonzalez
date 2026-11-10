@@ -1,4 +1,4 @@
-# Agente Beverly González
+# Agente de planta PIA-3 · Inyección de agua
 
 Esqueleto de la Entrega 1 del TP de Academia Novit 2026.
 

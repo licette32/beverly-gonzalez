@@ -5,7 +5,7 @@ services:
     environment:
       MQTT_HOST: ${MQTT_HOST:-broker}
       MQTT_PORT: ${MQTT_PORT:-1883}
-      SISTEMA_NOMBRE: ${SISTEMA_NOMBRE:-beverly-gonzalez}
+      SISTEMA_NOMBRE: ${SISTEMA_NOMBRE:-pia3-agente-planta}
       HEARTBEAT_S: ${HEARTBEAT_S:-30}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TZ: ${TZ:-America/Argentina/Buenos_Aires}
