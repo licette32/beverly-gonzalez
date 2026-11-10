@@ -30,5 +30,5 @@ Copiar `.env.example` a `.env` si hace falta cambiar el host, el puerto, el inte
 
 ```bash
 docker compose build
-docker run --rm -v "$(pwd)/tests:/app/tests" novit-agente python -m unittest discover -s tests -v
+docker run --rm -v "$(pwd -W)/tests:/app/tests" novit-agente python -m unittest discover -s tests -v
 ```
