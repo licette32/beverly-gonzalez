@@ -1,0 +1,28 @@
+services:
+  agente:
+    build:
+      context: ./agente
+    environment:
+      MQTT_HOST: ${MQTT_HOST:-broker}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      SISTEMA_NOMBRE: ${SISTEMA_NOMBRE:-beverly-gonzalez}
+      HEARTBEAT_S: ${HEARTBEAT_S:-30}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TZ: ${TZ:-America/Argentina/Buenos_Aires}
+      HTTP_PROXY: ${HTTP_PROXY:-http://enlace:3128}
+      HTTPS_PROXY: ${HTTPS_PROXY:-http://enlace:3128}
+      NO_PROXY: ${NO_PROXY:-broker,sim,localhost}
+    networks:
+      - planta-lan
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1g
+    labels:
+      academia.planta: pc
+
+networks:
+  planta-lan:
+    external: true
