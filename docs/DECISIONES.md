@@ -26,13 +26,16 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 ## D2. Transcripción
 
-**Decisión:** usar `faster-whisper` con modelo `small` en int8 y respaldo `base`. El modelo se predescarga en la imagen o en un volumen.
+**Decisi�n:** usar `faster-whisper` con modelo `base` en int8, `beam_size=5`, `cpu_threads=2` y `OMP_NUM_THREADS=2`. El modelo se hornea en la imagen y se carga con `local_files_only=True`. El prompt de vocabulario de planta `PROMPT` se pasa a la transcripci�n para mejorar reconocimiento de equipos y valores.
 
-**Alternativas:** `base` solamente; `medium`; transcripción en la nube.
+**Alternativas:** `small` con beam 5; `small` con beam 1; `medium`; transcripci�n en la nube.
+**Por qu�:** medido en la i3 de 2 n�cleos con la misma nota de 11,24 s, `small` con beam 1 tard� 19,77 s y `base` con beam 1 tard� 4,46 s; `small` con beam 5 tard� 24,87 s. `small` no entra
 
-**Por qué:** `small` ofrece una mejora razonable en español sin el costo de `medium`. `base` queda como respaldo si el tiempo o la memoria no alcanzan. La descarga en caliente no es aceptable en corrección.
+**Por qué:** medido en la i3 de 2 núcleos con la misma nota de 11,24 s, `small` con beam 1 tardó 19,77 s y `base` con beam 1 tardó 4,46 s; `small` con beam 5 tardó 24,87 s. `small` no entra en el presupuesto de B2 ni con beam 1. `base` con `OMP_NUM_THREADS=2` evita la sobresuscripción de CTranslate2 y deja la transcripción dentro del camino crítico. La descarga en caliente no es aceptable en corrección.
 
-**Consecuencias:** hay que medir el tiempo real de transcripción. Si una nota tarda más de aproximadamente 20 segundos, se revisa el modelo o la estrategia.
+**Consecuencias:** la alerta y el borrador usan la transcripción completa de `base`. Si una nota supera aproximadamente 20 segundos, se revisa el modelo o los recursos. La imagen crece y el build necesita red para descargar el modelo.
+
+**Nota:** Entrega 1 sin LLM en el camino crítico; interpretación determinista.
 
 ## D3. Modelo de lenguaje
 
@@ -174,6 +177,27 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 **Consecuencias:** si más adelante se agrega Ollama, hay que sumar `ollama` a `NO_PROXY`. El compose deja estos valores configurables por `.env`.
 
+## D17. Worker de notas y alerta de seguridad
+
+**Decisión:** procesar cada `NotaRecorrida` en una cola y un hilo aparte. El hilo descarga el audio, lo transcribe, ejecuta el detector y publica un `EventoSistema` de tipo `AlertaSeguridad` por categoría y un `MensajeTablet` de aviso por nota. El hilo de MQTT solo valida y encola; el latido corre en su propio hilo.
+
+**Alternativas:** descargar, transcribir y detectar dentro del callback de MQTT.
+
+**Por qué:** una descarga lenta o una transcripción de varios segundos no puede bloquear la recepción ni el latido.
+
+**Consecuencias:** la cola absorbe ráfagas. El aviso usa `espera_respuesta=False`, `nota_ids=[nota.id]` y una fila `condicion_insegura` con `valor=None`; el evento usa `origen="parte"`, `nota_ids=[nota.id]` e id determinista por nota y categoría. Se loguean descarga, transcripción, detección, publicación y total desde la llegada.
+
+## D18. Whisper horneado, precalentado y recursos
+**Decisi�n:** hornear `faster-whisper` base int8 en la imagen, cargarlo y hacer una transcripci�n de calentamiento. Usar `language="es"`, `beam_size=5`, `cpu_threads=2`, `OMP_NUM_THREADS=2` e `init: true`. El prompt de vocabulario de planta `PROMPT` se incluye en la transcripci�n. Suscribir y arrancar el latido antes de `precargar()`: las notas se reciben y descargan mientras el modelo carga, y `transcribir()` espera el evento `_listo`. Si la precarga falla, el evento se setea igual para desbloquear al worker. Subir el agente a 2 CPU y 2 GB.
+
+**Alternativas:** `small` con beam 5; publicar el primer latido despu�s de la precarga; descargar el modelo al arrancar; usar 1 CPU/1 GB; calentar con la primera nota real.
+**Por qu�:** en la i3 de 2 n�cleos `small` con beam 1 tard� 19,77 s y `base` con beam 1 tard� 4,46 s para la misma nota; el calentamiento deja la primera inferencia dentro de B2. `init: true` evita el contenedor zombie. El latido y la suscripci�n antes de la precarga mantienen F2 y evitan perder notas si la carga tarda. La precarga fallida no debe colgar el hilo de transcripci�n.
+**Alternativas:** `small` con beam 5; publicar el primer latido después de la precarga; descargar el modelo al arrancar; usar 1 CPU/1 GB; calentar con la primera nota real.
+
+**Por qué:** en la i3 de 2 núcleos `small` con beam 1 tardó 19,77 s y `base` con beam 1 tardó 4,46 s para la misma nota; el calentamiento deja la primera inferencia dentro de B2. `init: true` evita el contenedor zombie. El latido y la suscripción antes de la precarga mantienen F2 y evitan perder notas si la carga tarda. La precarga fallida no debe colgar el hilo de transcripción.
+
+**Consecuencias:** la imagen crece y el build necesita red para descargar el modelo. Si el modelo no está en la caché, el agente falla al arrancar en vez de descargarlo durante la corrección. El primer latido sale antes de que el modelo esté listo, pero las notas quedan encoladas y se transcriben cuando `_listo` se setea. El agente usa 2 CPU y 2 GB del presupuesto total.
+
 ## Reparto de trabajo
 
 **Decisión:** Beverly escribe el detector S1-S4 y la regla B1. El asistente aporta la estructura, los casos de prueba y la revisión.
@@ -203,3 +227,19 @@ El primer paso es un servicio `agente` que se conecta al broker, valida los mens
 **Cómo funciona:** entre eventos la planta avanza a ×1800 (1 segundo real = 30 minutos simulados). Cuando ocurre algo que requiere atención, baja a ×5 (1 segundo real = 5 segundos simulados). Vuelve a ×1800 cuando pasaron al menos 3 segundos reales desde la frenada, el sistema lleva 5 segundos reales sin publicar mensajes que no sean latidos y no hay una pregunta de tablet esperando respuesta. Si se llega a 120 segundos reales desde la frenada, vuelve a ×1800 aunque no se cumplan las condiciones.
 
 **Consecuencias:** una nota tiene una ventana lenta de 5 segundos reales si el sistema no publica nada, se estira 5 segundos después del último mensaje y tiene un tope de 120 segundos reales. Para B2, la alerta y el aviso de tablet deben salir dentro de 30 segundos reales desde la nota, aunque la ventana lenta pueda durar más.
+
+## D19. Sentinela SIN-EQUIPO, build oficial y desviaciones
+
+**Decisiòn:** se usa el centinela `TAG_SIN_EQUIPO = "SIN-EQUIPO"` en wire para indicar que un item no tiene equipo asignado; en el interno `ItemParte.tag=None` y B1 con `equipo=None`. Se documenta en `DECISIONES.md` y en el contrato Pydantic `FilaParte.tag: str`. Se registra que el build oficial `docker compose build --no-cache` desde el repo funciona con la imagen `pgvector/pgvector:pg16` y que el workaround `Dockerfile.a-test` y la imagen local `alumno-novit-agente:latest` quedaron descartados para la entrega final. Se anota que el prompt `PROMPT` de `transcripcion.py` contiene solo vocabulario de planta y no frases de notas de escenario.
+
+**Alternativas:** mantener la imagen `alumno-novit-agente:latest` con `--sin-construir`, o reconstruir el Dockerfile original desde cero.
+
+**Por quò:** garantizar que la entrega use el build limpio, que la detecciòn de equipo ambiguo quede registrada y que el prompt sea estable y reutilizable.
+
+**Consecuencias:** el repositorio no debe contener `Dockerfile.a-test` ni imágenes locales a mano; el `gitignore` debe ignorar carpetas de corridas y volcados. El prompt `PROMPT` es parte del código fuente y se comparte mediante el repo.
+
+## D19. Sentinela SIN-EQUIPO, build oficial y desviaciones
+**Decisiòn:** se usa el centinela `TAG_SIN_EQUIPO = "SIN-EQUIPO"` en wire para indicar que un item no tiene equipo asignado; en el interno `ItemParte.tag=None` y B1 con `equipo=None`. Se documenta en `DECISIONES.md` y en el contrato Pydantic `FilaParte.tag: str`. Se registra que el build oficial `docker compose build --no-cache` desde el repo funciona con la imagen `pgvector/pgvector:pg16` y que el workaround `Dockerfile.a-test` y la imagen local `alumno-novit-agente:latest` quedaron descartados para la entrega final. Se anota que el prompt `PROMPT` de `transcripcion.py` contiene solo vocabulario de planta y no frases de notas de escenario.
+**Alternativas:** mantener la imagen `alumno-novit-agente:latest` con `--sin-construir`, o reconstruir el Dockerfile original desde cero.
+**Por quò:** garantizar que la entrega use el build limpio, que la detecciòn de equipo ambiguo quede registrada y que el prompt sea estable y reutilizable.
+**Consecuencias:** el repositorio no debe contener `Dockerfile.a-test` ni imágenes locales a mano; el `gitignore` debe ignorar carpetas de corridas y volcados. El prompt `PROMPT` es parte del código fuente y se comparte mediante el repo.

@@ -23,6 +23,13 @@ build/
 .env.*
 !.env.example
 
+# Carpetas de entrega y volcados
+correccion/
+corridas/
+api_correccion_volcados/
+
+# Python
+
 # Docker y datos locales
 *.log
 correccion/corridas/
@@ -31,6 +38,7 @@ volumenes/
 volumes/
 
 # Audio y modelos pesados
+!agente/sistema/calentamiento.wav
 *.wav
 *.mp3
 *.onnx
@@ -41,3 +49,5 @@ volumes/
 .idea/
 .DS_Store
 Thumbs.db
+
+!agente/sistema/calentamiento.wav

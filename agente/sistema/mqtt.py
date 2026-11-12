@@ -2,6 +2,7 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Callable
 
 from paho.mqtt import client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
@@ -35,6 +36,8 @@ class ClienteMQTT:
         )
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
+        self.al_recibir_nota: Callable[[NotaRecorrida], None] | None = None
+        self.al_recibir_respuesta: Callable[[RespuestaOperador], None] | None = None
 
     def conectar(self, intentos: int = 30, espera_s: float = 2.0) -> None:
         for intento in range(1, intentos + 1):
@@ -54,7 +57,8 @@ class ClienteMQTT:
             log.info("suscrito a %s", topico)
 
     def publicar(self, topico: str, modelo: BaseModel) -> None:
-        payload = json.dumps(modelo.model_dump(mode="json"), ensure_ascii=False)
+        valido = type(modelo).model_validate(modelo.model_dump(mode="json"))
+        payload = json.dumps(valido.model_dump(mode="json"), ensure_ascii=False)
         info = self._client.publish(topico, payload, qos=1, retain=False)
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             raise RuntimeError(f"falló la publicación en {topico}: {info.rc}")
@@ -77,8 +81,19 @@ class ClienteMQTT:
         if modelo is None:
             return
         try:
-            modelo.model_validate_json(msg.payload)
+            datos = modelo.model_validate_json(msg.payload)
         except ValidationError as exc:
             log.error("mensaje inválido en %s: %s", msg.topic, exc)
             return
-        log.info("mensaje válido en %s", msg.topic)
+        if not msg.topic.startswith("planta/sensores/"):
+            log.info("mensaje válido en %s", msg.topic)
+        if msg.topic == Topicos.RECORRIDAS and self.al_recibir_nota is not None:
+            try:
+                self.al_recibir_nota(datos)
+            except Exception:
+                log.exception("no se pudo encolar la nota")
+        elif msg.topic == Topicos.RESPUESTAS and self.al_recibir_respuesta is not None:
+            try:
+                self.al_recibir_respuesta(datos)
+            except Exception:
+                log.exception("no se pudo encolar la respuesta")

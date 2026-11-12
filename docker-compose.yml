@@ -8,21 +8,46 @@ services:
       SISTEMA_NOMBRE: ${SISTEMA_NOMBRE:-pia3-agente-planta}
       HEARTBEAT_S: ${HEARTBEAT_S:-30}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-2}
       TZ: ${TZ:-America/Argentina/Buenos_Aires}
       HTTP_PROXY: ${HTTP_PROXY:-http://enlace:3128}
       HTTPS_PROXY: ${HTTPS_PROXY:-http://enlace:3128}
-      NO_PROXY: ${NO_PROXY:-broker,sim,localhost}
+      NO_PROXY: ${NO_PROXY:-broker,sim,localhost,postgres}
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql://novit:novit@postgres:5432/novit}
+      POSTGRES_REINTENTO_S: ${POSTGRES_REINTENTO_S:-2}
+      PREGUNTA_TIMEOUT_S: ${PREGUNTA_TIMEOUT_S:-60}
+    networks:
+      - planta-lan
+    init: true
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
+    labels:
+      academia.planta: pc
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-novit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-novit}
+      POSTGRES_DB: ${POSTGRES_DB:-novit}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     networks:
       - planta-lan
     restart: unless-stopped
     deploy:
       resources:
         limits:
-          cpus: "1"
+          cpus: "0.5"
           memory: 1g
-    labels:
-      academia.planta: pc
 
 networks:
   planta-lan:
     external: true
+
+volumes:
+  pgdata:
