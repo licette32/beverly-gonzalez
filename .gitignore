@@ -51,3 +51,4 @@ volumes/
 Thumbs.db
 
 !agente/sistema/calentamiento.wav
+aplicar_parche.py
