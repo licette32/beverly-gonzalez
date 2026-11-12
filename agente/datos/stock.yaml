@@ -1,0 +1,13 @@
+stock:
+  - tag: "B-101"
+    nombre: "Bomba Uno"
+    cantidad: 100
+    unidad: "unidades"
+  - tag: "B-102"
+    nombre: "Bomba Dos"
+    cantidad: 95
+    unidad: "unidades"
+  - tag: "F-201A"
+    nombre: "Filtro A"
+    cantidad: 50
+    unidad: "unidades"

@@ -33,7 +33,7 @@ api_correccion_volcados/
 # Docker y datos locales
 *.log
 correccion/corridas/
-datos/
+/datos/
 volumenes/
 volumes/
 

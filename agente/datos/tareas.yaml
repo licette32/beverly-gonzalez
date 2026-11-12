@@ -1,0 +1,11 @@
+tareas:
+  - id: "T-001"
+    nombre: "Revisar presión de descarga"
+    tag: "B-101"
+    variable: "presion_descarga_local"
+    frecuencia: "diaria"
+  - id: "T-002"
+    nombre: "Inspeccionar filtro"
+    tag: "F-201A"
+    variable: "presion_diferencial"
+    frecuencia: "semanal"

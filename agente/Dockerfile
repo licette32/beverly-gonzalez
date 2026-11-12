@@ -18,5 +18,6 @@ RUN pip install -r requirements.txt
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8', cpu_threads=2, num_workers=1)"
 
 COPY sistema ./sistema
+COPY datos ./datos
 
 CMD ["python", "-m", "sistema.main"]

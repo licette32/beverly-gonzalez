@@ -41,25 +41,16 @@ En la raíz del repositorio público en GitHub deben estar:
 |----------|-----|---------------------|
 | **agente** | Recibe mensajes MQTT, descarga audio, transcribe con Whisper base int8 (beam 5 + `PROMPT`), ejecuta detectores S1‑S4, publica `EventoSistema` y `MensajeTablet`. | Usa reglas deterministas; el LLM sólo estructuriza, no decide seguridad. |
 | **postgres** | Persiste eventos, órdenes, outbox, pending. | `pgvector/pgvector:pg16`; sin dependencia de Redis. |
-| **planta** | Simula la central térmica, genera audios, publica sensores. | Modelo `base` + prompt `PROMPT` mejora reconocimiento de equipos y valores. |
+| **planta** | Simula la planta de inyecci�n de agua, genera audios, publica sensores. | Modelo `base` + prompt `PROMPT` mejora reconocimiento de equipos y valores. |
 
 ## Limitaciones (Entrega 1)
 
 *Sin LLM en el camino crítico:* la decisión de alarma (B2) se toma con reglas sobre valores numéricos y observaciones.
-*Sin RAG ni `/api/verdad:`:* la verdad viene del contrato MQTT y del operador.
-*Escenarios de órdenes y certificación:* quedan para la Entrega 2.
+**RAG: rag.py e indexado.py implementan b�squeda BM25 en memoria sobre los documentos de la planta; no est�n conectados al flujo del agente. manuales_buscar devuelve una lista vac�a. El servidor MCP (mcp_server.py) se ejecuta por separado y no forma parte del compose. El agente no lee /api/verdad en ejecuci�n; solo la usa evaluacion/verdad.py de forma offline.scenarios de órdenes y certificación:* quedan para la Entrega 2.
 *Transcripción:* usa `faster‑whisper` `base` int8, `beam_size=5`, y un prompt de vocabulario de planta (`PROMPT`). Notas > 20 s de audio pueden necesitar revisión manual.
 *Latido F2:* mide huecos de hasta 60 s reales; la alerta de seguridad debe salir en < 30 s reales desde la nota.
 
-### Pol�tica de memoria
-
-- Se recuerda cada nota completada (texto, decisiones y estado de borrador)
-- En PostgreSQL persiste mientras la corrida est� activa; al cerrarse la planta,
-  los datos se compactan y se conservan el �ltimo estado de cada nota.
-- No se guardan transcripciones completadas hace m�s de 45 d�as (historian_rango).
-
-
-## Uso en local
+La pol�tica de memoria est� en docs/MEMORIA.md.## Uso en local
 
 - Para desarrollar en local: `docker compose -p planta ... up -d` y `docker compose -p alumno-novit ... up -d`.
 - Para la corrida final: `python correccion/corregir.py --repo . --alumno etapa-final --escenarios martes-tranquilo fuga-sin-enlace --salida correccion/corridas/etapa-final`.

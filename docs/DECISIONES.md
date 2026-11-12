@@ -37,18 +37,8 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 **Nota:** Entrega 1 sin LLM en el camino crÃ­tico; interpretaciÃ³n determinista.
 
-## D3. Modelo de lenguaje
-
-**DecisiÃ³n:** usar Qwen2.5 3B Q4_K_M como modelo principal y Llama 3.2 3B o 1.5B como respaldo. No usar modelos de 9B.
-
-**Alternativas:** Qwen 7B/9B, Llama 3.1 8B, modelos en la nube.
-
-**Por quÃ©:** un modelo de 3B cuantizado entra en el presupuesto de memoria junto con Whisper, el agente y PostgreSQL. Los modelos de 9B no dejan margen para el resto del sistema en 8 GB.
-
-**Consecuencias:** las tareas de interpretaciÃ³n deben estar acotadas con esquemas y reglas deterministas. El modelo no decide seguridad ni aprobaciones.
-
-## D4. DetecciÃ³n determinista
-
+## D3. Sin modelo de lenguaje en la Entrega 1
+**Decisión:** en la Entrega 1 no se utiliza ningún modelo de lenguaje (LLM). La interpretación de partes, detección de seguridad y clasificación de novedades se implementancomo reglas deterministas en código. El modelo Whisper solo se usa para transcripción local.\n**Alternativas:** para la Entrega 2, se podría integrar un modelo LLM local opcional detrás del broker.\n**Por qué:** el presupuesto de memoria (8 GB) y la necesidad de latencia predecible (B2 < 30 s) hacen impráctico un LLM en el camino crítico. La arquitectura híbrida Whisper + reglas garantiza predicción de tiempo y cumplimiento de criterios A1-A4b, B1, B2, F1-F2.\n**Consecuencias:** las tareas de interpretación están acotadas con esquemas Pydantic y reglas fijas; no hay variabilidad en las decisiones de seguridad ni en la clasificación de novedades.\n
 **DecisiÃ³n:** las reglas de seguridad S1-S4, los lÃ­mites de alarma y la clasificaciÃ³n de novedad se implementan en cÃ³digo. El LLM solo interpreta el texto y propone datos estructurados.
 
 **Alternativas:** pedirle al LLM que decida si hay una situaciÃ³n insegura o si corresponde escalar.
@@ -87,18 +77,8 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 **Consecuencias:** la latencia de la alerta depende de la transcripciÃ³n completa. Si se mide que la transcripciÃ³n supera aproximadamente 20 segundos, se rediscute la estrategia. La alerta y el aviso de tablet deben salir dentro de los 30 segundos reales que exige B2.
 
-## D8. Ollama y red
-
-**DecisiÃ³n:** ejecutar Ollama como servicio separado en la red `planta-lan`, con `OLLAMA_HOST=http://ollama:11434`, y agregar `ollama` a `NO_PROXY`. Si Ollama corre en el host, usar `host.docker.internal` y el mismo bypass de proxy.
-
-**Alternativas:** compartir el localhost del contenedor; salir por el proxy para llegar a Ollama.
-
-**Por quÃ©:** el contenedor del agente no comparte el localhost del host y el proxy de la planta no debe interceptar el trÃ¡fico interno.
-
-**Consecuencias:** el compose debe declarar el servicio de Ollama o la configuraciÃ³n del host, y el sistema debe esperar a que Ollama estÃ© disponible.
-
-## D9. RAG
-
+## D8. Sin uso de Ollama en la Entrega 1
+**Decisión:** en la Entrega 1 no se utiliza Ollama ni ningún modelo LLM en el camino crítico. La configuración de proxy HTTP solo se aplica al agente para conexión con el broker MQTT y al servicio de planta. No se configura Ollama ni ningún servicio LLM externo.\n**Alternativas:** para la Entrega 2, Ollama podría integrarse como servicio opcional detrás del broker.\n**Por qué:** la Entrega 1 corre completamente local sin dependencias de servicios externos; el circuito de voz, detección y alerta funcionan con reglas deterministas y Whisper local.\n**Consecuencias:** se elimina la dependencia de Ollama y su configuración de red; el sistema es autónomo para la Entrega 1.\n
 **DecisiÃ³n:** el RAG documental queda diferido en la Entrega 1. No se implementan chunking, Ã­ndice vectorial ni recall@k. Postgres usa la imagen `pgvector/pgvector:pg16` para dejar la extensiÃ³n disponible en una entrega futura. Los lÃ­mites, el stock y el catÃ¡logo de tareas no salen de RAG: se consultan por API, SQL o YAML.
 
 **Alternativas:** implementar pgvector, chunking, bÃºsqueda hÃ­brida y reranking antes del camino crÃ­tico.
@@ -197,14 +177,6 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 **Por quÃ©:** en la i3 de 2 nÃºcleos `small` con beam 1 tardÃ³ 19,77 s y `base` con beam 1 tardÃ³ 4,46 s para la misma nota; el calentamiento deja la primera inferencia dentro de B2. `init: true` evita el contenedor zombie. El latido y la suscripciÃ³n antes de la precarga mantienen F2 y evitan perder notas si la carga tarda. La precarga fallida no debe colgar el hilo de transcripciÃ³n.
 
 **Consecuencias:** la imagen crece y el build necesita red para descargar el modelo. Si el modelo no estÃ¡ en la cachÃ©, el agente falla al arrancar en vez de descargarlo durante la correcciÃ³n. El primer latido sale antes de que el modelo estÃ© listo, pero las notas quedan encoladas y se transcriben cuando `_listo` se setea. El agente usa 2 CPU y 2 GB del presupuesto total.
-
-## Reparto de trabajo
-
-**DecisiÃ³n:** Beverly escribe el detector S1-S4 y la regla B1. El asistente aporta la estructura, los casos de prueba y la revisiÃ³n.
-
-**Por quÃ©:** son las partes donde la comprensiÃ³n de las reglas de planta y la defensa oral importan mÃ¡s.
-
-**Consecuencias:** antes de implementar esas piezas se acuerdan la estructura de datos, los casos lÃ­mite y los resultados esperados. El resto del esqueleto se implementa y se prueba primero.
 
 ## Esqueleto de la Entrega 1
 
