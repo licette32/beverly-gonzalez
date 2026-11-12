@@ -381,7 +381,14 @@ def _resolver_pregunta(
             return Resultado("sin_entender", items, "no se entendió el equipo")
         for indice, item in enumerate(items):
             if item.tag is None:
-                items[indice] = replace(item, tag=tag)
+                nuevo = replace(item, tag=tag)
+                # Si la unidad no se dijo y se habia supuesto, ahora que se
+                # conoce el equipo se toma la de su manometro.
+                if item.unidad_inferida and item.variable == "presion_descarga_local":
+                    unidad = catalogo.unidad_manometro(tag)
+                    if unidad is not None:
+                        nuevo = replace(nuevo, unidad=unidad)
+                items[indice] = nuevo
         return Resultado("correccion", items, f"equipo resuelto: {tag}")
 
     encontrados = numeros(normalizado)

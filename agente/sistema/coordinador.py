@@ -17,6 +17,7 @@ from .ambiguedades import (
 from .borradores import borrador, items_seguridad, pregunta
 from .catalogo import CatalogoPlanta, historian_rango
 from .config import PREGUNTA_TIMEOUT_S
+from .corte import MAX_CORRECCIONES, mensaje_corte
 from .eventos import eventos_parte
 from .interpretacion import interpretar
 from .mqtt import ClienteMQTT
@@ -315,6 +316,16 @@ class CoordinadorPartes:
             log.info("nota %s confirmada", estado.nota_id)
             return
 
+        if estado.intento >= MAX_CORRECCIONES:
+            log.warning(
+                "nota %s alcanzó el máximo de %s correcciones; se avisa y se detiene",
+                estado.nota_id,
+                MAX_CORRECCIONES,
+            )
+            self._cliente.publicar(
+                Topicos.TABLET, mensaje_corte(estado.nota, "correcciones")
+            )
+            return
         estado.items = resultado.items
         estado.intento += 1
         mensaje = borrador(estado.nota, estado.items, estado.intento)

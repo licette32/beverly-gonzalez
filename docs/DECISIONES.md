@@ -69,13 +69,13 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 ## D6. Orquestación
 
-**Decisión:** usar un pipeline asíncrono propio para MQTT, colas, reglas y persistencia. Usar LangChain para llamadas al modelo y salidas estructuradas. No usar LangGraph en la Entrega 1.
+**Decisión:** pipeline propio con hilos y colas: descarga en un pool, transcripción en un worker, coordinador de partes y latido en un hilo aparte. En la Entrega 1 el camino crítico no usa un modelo de lenguaje: la detección de seguridad, la extracción del parte, las ambigüedades y las correcciones del operador son deterministas. Por eso no se usa LangChain ni LangGraph.
 
-**Alternativas:** LangGraph desde el inicio; un framework de agentes completo.
+**Alternativas:** LangChain para llamadas al modelo y salidas estructuradas; LangGraph desde el inicio; un framework de agentes completo.
 
-**Por qué:** el camino crítico es un flujo de eventos con reglas claras, no un grafo de agentes. LangGraph agrega complejidad que no se corrige en esta entrega.
+**Por qué:** con 2 núcleos y Whisper dentro del camino crítico, un LLM local no entra en los 30 s de B2. Las reglas deterministas son auditables y reproducibles.
 
-**Consecuencias:** el código debe separar recepción, transcripción, interpretación, detección y publicación. LangGraph queda para una entrega posterior si aporta valor.
+**Consecuencias:** el compose no declara ningún servicio de modelo de lenguaje. Si una entrega futura incorpora un LLM, entra detrás del coordinador sin tocar la detección de seguridad. Las tools de solo lectura y el servidor MCP quedan listos para ese caso.
 
 ## D7. Transcripción completa antes del detector
 
@@ -99,13 +99,13 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 ## D9. RAG
 
-**Decisión:** el RAG documental queda como mínimo o diferido. Para la Entrega 1, el catálogo de tareas y repuestos se resuelve con YAML o SQL, no con recuperación semántica.
+**Decisión:** el RAG documental queda diferido en la Entrega 1. No se implementan chunking, índice vectorial ni recall@k. Postgres usa la imagen `pgvector/pgvector:pg16` para dejar la extensión disponible en una entrega futura. Los límites, el stock y el catálogo de tareas no salen de RAG: se consultan por API, SQL o YAML.
 
 **Alternativas:** implementar pgvector, chunking, búsqueda híbrida y reranking antes del camino crítico.
 
-**Por qué:** los criterios corregidos esta semana no dependen de RAG. La recuperación documental es revisión manual y puede esperar.
+**Por qué:** el camino crítico de la Entrega 1 (B2, parte, confirmaciones) no necesita recuperación semántica, y el tiempo se priorizó ahí.
 
-**Consecuencias:** no se bloquea la entrega por embeddings. El RAG se retoma cuando A1-A4b, B1, B2, F1 y F2 estén estables.
+**Consecuencias:** la tool de búsqueda en manuales existe con su contrato, pero devuelve una lista vacía documentada como diferida. El recall@k queda como trabajo pendiente y declarado.
 
 ## D10. Contrato por pip
 
@@ -228,18 +228,13 @@ El primer paso es un servicio `agente` que se conecta al broker, valida los mens
 
 **Consecuencias:** una nota tiene una ventana lenta de 5 segundos reales si el sistema no publica nada, se estira 5 segundos después del último mensaje y tiene un tope de 120 segundos reales. Para B2, la alerta y el aviso de tablet deben salir dentro de 30 segundos reales desde la nota, aunque la ventana lenta pueda durar más.
 
-## D19. Sentinela SIN-EQUIPO, build oficial y desviaciones
+## D19. Centinela SIN-EQUIPO, build oficial y prompt de transcripción
 
-**Decisiòn:** se usa el centinela `TAG_SIN_EQUIPO = "SIN-EQUIPO"` en wire para indicar que un item no tiene equipo asignado; en el interno `ItemParte.tag=None` y B1 con `equipo=None`. Se documenta en `DECISIONES.md` y en el contrato Pydantic `FilaParte.tag: str`. Se registra que el build oficial `docker compose build --no-cache` desde el repo funciona con la imagen `pgvector/pgvector:pg16` y que el workaround `Dockerfile.a-test` y la imagen local `alumno-novit-agente:latest` quedaron descartados para la entrega final. Se anota que el prompt `PROMPT` de `transcripcion.py` contiene solo vocabulario de planta y no frases de notas de escenario.
+**Decisión:** en el cable (contrato `FilaParte.tag: str`, obligatorio) un ítem sin equipo se publica con el centinela `SIN-EQUIPO`; internamente `ItemParte.tag` es `None` y el evento B1 se publica con `equipo=None`. El build oficial es `docker compose build` desde el repositorio, con la imagen `pgvector/pgvector:pg16` para Postgres. El `PROMPT` de `transcripcion.py` contiene solo vocabulario de la planta, nunca frases de las notas de los escenarios.
 
-**Alternativas:** mantener la imagen `alumno-novit-agente:latest` con `--sin-construir`, o reconstruir el Dockerfile original desde cero.
+**Alternativas:** relajar el contrato para aceptar `tag` nulo; usar la imagen local `alumno-novit-agente:latest` con construcción previa (descartado).
 
-**Por quò:** garantizar que la entrega use el build limpio, que la detecciòn de equipo ambiguo quede registrada y que el prompt sea estable y reutilizable.
+**Por qué:** el contrato no admite `tag` nulo y no se modifica. El build limpio es lo que va a ejecutar el corrector. Un prompt con frases de escenario sería sobreajuste a la corrección.
 
-**Consecuencias:** el repositorio no debe contener `Dockerfile.a-test` ni imágenes locales a mano; el `gitignore` debe ignorar carpetas de corridas y volcados. El prompt `PROMPT` es parte del código fuente y se comparte mediante el repo.
+**Consecuencias:** el repositorio no contiene `Dockerfile.a-test` ni imágenes locales, y `.gitignore` excluye corridas y volcados. El `PROMPT` es parte del código fuente y viaja con el repositorio.
 
-## D19. Sentinela SIN-EQUIPO, build oficial y desviaciones
-**Decisiòn:** se usa el centinela `TAG_SIN_EQUIPO = "SIN-EQUIPO"` en wire para indicar que un item no tiene equipo asignado; en el interno `ItemParte.tag=None` y B1 con `equipo=None`. Se documenta en `DECISIONES.md` y en el contrato Pydantic `FilaParte.tag: str`. Se registra que el build oficial `docker compose build --no-cache` desde el repo funciona con la imagen `pgvector/pgvector:pg16` y que el workaround `Dockerfile.a-test` y la imagen local `alumno-novit-agente:latest` quedaron descartados para la entrega final. Se anota que el prompt `PROMPT` de `transcripcion.py` contiene solo vocabulario de planta y no frases de notas de escenario.
-**Alternativas:** mantener la imagen `alumno-novit-agente:latest` con `--sin-construir`, o reconstruir el Dockerfile original desde cero.
-**Por quò:** garantizar que la entrega use el build limpio, que la detecciòn de equipo ambiguo quede registrada y que el prompt sea estable y reutilizable.
-**Consecuencias:** el repositorio no debe contener `Dockerfile.a-test` ni imágenes locales a mano; el `gitignore` debe ignorar carpetas de corridas y volcados. El prompt `PROMPT` es parte del código fuente y se comparte mediante el repo.

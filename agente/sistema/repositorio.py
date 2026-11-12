@@ -43,6 +43,7 @@ def _estado_json(estado: EstadoNota) -> dict[str, Any]:
                 "valor": item.valor,
                 "unidad": item.unidad,
                 "observacion": item.observacion,
+                "unidad_inferida": item.unidad_inferida,
             }
             for item in estado.items
         ],

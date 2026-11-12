@@ -1,6 +1,6 @@
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -10,6 +10,7 @@ class ItemParte:
     valor: float | None
     unidad: str | None = None
     observacion: str | None = None
+    unidad_inferida: bool = field(default=False, compare=False)
 
 
 UNIDAD_MANOMETRO = {"B-101": "kg/cm2", "B-102": "psi", "B-103": "bar"}
@@ -286,9 +287,18 @@ def _items_oracion(
             continue
         tag = _tag_en(numero_[0], menciones, heredado)
         unidad = _unidad(oracion, numero_[1], coincidencia.start())
-        if unidad is None:
+        inferida = unidad is None
+        if inferida:
             unidad = unidades_manometro.get(tag or "", "kg/cm2")
-        items.append(ItemParte(tag, "presion_descarga_local", numero_[2], unidad))
+        items.append(
+            ItemParte(
+                tag,
+                "presion_descarga_local",
+                numero_[2],
+                unidad,
+                unidad_inferida=inferida,
+            )
+        )
 
     for coincidencia in re.finditer(r"\bdiferencial\b", oracion):
         numero_ = _ultimo_numero(lista_numeros, coincidencia.start())
