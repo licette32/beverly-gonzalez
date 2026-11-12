@@ -51,6 +51,14 @@ En la raíz del repositorio público en GitHub deben estar:
 *Transcripción:* usa `faster‑whisper` `base` int8, `beam_size=5`, y un prompt de vocabulario de planta (`PROMPT`). Notas > 20 s de audio pueden necesitar revisión manual.
 *Latido F2:* mide huecos de hasta 60 s reales; la alerta de seguridad debe salir en < 30 s reales desde la nota.
 
+### Pol�tica de memoria
+
+- Se recuerda cada nota completada (texto, decisiones y estado de borrador)
+- En PostgreSQL persiste mientras la corrida est� activa; al cerrarse la planta,
+  los datos se compactan y se conservan el �ltimo estado de cada nota.
+- No se guardan transcripciones completadas hace m�s de 45 d�as (historian_rango).
+
+
 ## Uso en local
 
 - Para desarrollar en local: `docker compose -p planta ... up -d` y `docker compose -p alumno-novit ... up -d`.

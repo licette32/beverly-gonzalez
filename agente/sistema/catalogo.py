@@ -118,7 +118,7 @@ def historian_rango(
     )
     parametros = urllib.parse.urlencode(
         {
-            "desde": (ts - timedelta(hours=12)).isoformat(),
+            "desde": (ts - timedelta(days=45)).isoformat(),
             "hasta": ts.isoformat(),
         }
     )
