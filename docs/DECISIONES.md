@@ -30,7 +30,7 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 **Alternativas:** `small` con beam 5; `small` con beam 1; `medium`; transcripción en la nube.
 
-**Por qué:** medido en la i3 de 2 núcleos con la misma nota de 11,24 s, `small` con beam 1 tardó 19,77 s y `base` con beam 1 tardó 4,46 s; `small` con beam 5 tardó 24,87 s. `small` no entra en el presupuesto de B2 ni con beam 1. `base` con `OMP_NUM_THREADS=2` evita la sobresuscripción de CTranslate2 y deja la transcripción dentro del camino crítico. La descarga en caliente no es aceptable en corrección.
+**Por qué:** medido en la i3 de 2 núcleos con la misma nota de 11,24 s y modelo caliente, `small` con beam 1 tardó 19,77 s y `base` con beam 1 tardó 4,46 s; con beam 5, `base` tardó 5,41 s y `small` 24,38 s. `small` no entra en el presupuesto de B2 ni con beam 1. `base` con `OMP_NUM_THREADS=2` evita la sobresuscripción de CTranslate2 y deja la transcripción dentro del camino crítico. La descarga en caliente no es aceptable en corrección.
 
 **Consecuencias:** la alerta y el borrador usan la transcripción completa de `base`. Si una nota supera aproximadamente 20 segundos, se revisa el modelo o los recursos. La imagen crece y el build necesita red para descargar el modelo.
 

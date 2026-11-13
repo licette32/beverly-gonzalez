@@ -4,7 +4,7 @@
 
 ### 1.1 Transcripción de audio
 - **Motor:** `faster-whisper` versión 1.2.1
-- **Modelo:** Whisper `base` (aprox. 74 M de parámetros), pesos de OpenAI, cuantizado en `int8`, ejecutado con `faster-whisper` (CTranslate2). Repositorio del modelo: [COMPLETAR: confirmar el id exacto que descarga faster-whisper para 'base' (probablemente Systran/faster-whisper-base)].
+- **Modelo:** Whisper `base` (aprox. 74 M de parámetros), pesos de OpenAI, cuantizado en `int8`, ejecutado con `faster-whisper` (CTranslate2). Repositorio del modelo: `Systran/faster-whisper-base` (mapeo de `base` en `faster_whisper/utils.py`).
 - **Parámetros:** `beam_size=5`, `cpu_threads=2`, `OMP_NUM_THREADS=2`, `language="es"`
 - **Prompt de vocabulario:** `PROMPT` personalizado con nombres de equipos, variables y unidades de la planta (incluye "kg/cm2", "psi", "bar", nombres de bombas B-101/B-102/B-103, filtros F-201A/F-201B, valores numéricos en español)
 - **Duración típica:** 4.46 s por nota de ~11 s con `base` beam 1 en hardware de 2 núcleos; el setup actual (beam 5 + 2 threads) queda dentro del presupuesto de B2 (~30 s reales por nota)
@@ -36,15 +36,15 @@
 
 | Componente | Especificación |
 |------------|----------------|
-| **Hardware** | [COMPLETAR: modelo de PC, CPU, RAM, GPU, SO] |
+| **Hardware** | Dell Inspiron 15 3511; Intel Core i3-1115G4 (2 núcleos / 4 hilos); 7,74 GiB de RAM; Intel UHD Graphics; Windows 11 Home 10.0.26200 (64 bits). |
 | **Docker** | `docker-compose.yml` con 2 servicios: `agente` y `postgres`. La planta (broker, enlace, sim) corre aparte, desde el compose del curso. |
 | **Sistema de Base de Datos** | PostgreSQL 16 con extensión `pgvector` (imagen `pgvector/pgvector:pg16`) |
 | **Entorno de deploy** | `docker compose build --no-cache` para build oficial |
 
-### Presupuesto de recursos (medido en i3 de 2 núcleos):
+### Presupuesto de recursos (medido en i3 de 2 núcleos, modelo caliente, int8, 2 hilos, nota `NOTA-00001.wav` de 11,24 s):
 - **Whisper `base` beam_size=1:** 4.46 s por nota de 11.24 s
-- **Whisper `base` beam_size=5:** [COMPLETAR: volver a medir] s (queda dentro de B2 de 30 s reales)
-- **Pequeño (`small`) no entra:** 19.77 s con beam 1, [COMPLETAR: volver a medir] s con beam 5; `small` no entra en el presupuesto al sumarse a Whisper + agente
+- **Whisper `base` beam_size=5:** 5.41 s (queda dentro de B2 de 30 s reales)
+- **Pequeño (`small`) no entra:** 19.77 s con beam 1, 24.38 s con beam 5; `small` no entra en el presupuesto al sumarse a Whisper + agente
 - **Elección de `base` + beam 5 + OMP_NUM_THREADS=2:** Deja la primera inferencia dentro de B2 con margen de seguridad
 
 ## 3. Consumo de Tokens y Costo Aproximado
@@ -57,7 +57,7 @@ No se evaluó un LLM local. Se descartó por el presupuesto de 8 GB y porque las
 
 ### Por qué `faster-whisper` `base` int8:
 - **Precisión suficiente** para el dominio de planta (nombres de equipos, valores numéricos en español, unidades)
-- **Performance dentro de B2:** 4.46 s base beam 1 / [COMPLETAR: volver a medir] base beam 5 en hardware de 2 núcleos; el setup actual (beam 5 + 2 threads) deja la primera inferencia dentro del presupuesto de 30 s reales
+- **Performance dentro de B2:** 4.46 s base beam 1 / 5.41 s base beam 5 en hardware de 2 núcleos; el setup actual (beam 5 + 2 threads) deja la primera inferencia dentro del presupuesto de 30 s reales
 - **Costo cero en tokens:** Ejecución 100% local, sin dependencia de APIs externas
 - **Compatibilidad con hardware:** Caben en 8 GB RAM junto con Whisper, agente y PostgreSQL
 
@@ -68,14 +68,15 @@ No se evaluó un LLM local. Se descartó por el presupuesto de 8 GB y porque las
 - **Rendimiento predecible:** Los tiempos de ejecución son fijos y conocidos, a diferencia de la latencia de un LLM
 
 ### Por qué Whisper sobre otras opciones:
-- `small` con beam 1 tarda 19.77 s; con beam 5 tarda [COMPLETAR: volver a medir] s – `small` no entra en el presupuesto cuando se suma al resto del agente
+- `small` con beam 1 tarda 19.77 s; con beam 5 tarda 24.38 s – `small` no entra en el presupuesto cuando se suma al resto del agente
 - `medium` tarda mucho más y tampoco caben los parámetros en 8 GB
 - Modelos en la nube (OpenAI Whisper, etc.) violan la restricción "sin enlace" de B2 (el enlace se cae a los 10 minutos en fuga-sin-enlace)
 
 ### Conclusión general:
 La arquitectura actual optó por un **enfoque híbrido**: Whisper local para la transcripción (único modelo probabilístico en el camino crítico) + reglas deterministas para toda la toma de decisiones (seguridad, parte, confirmaciones, rango histórico). Este diseño:
-- [COMPLETAR: resultados de etapa-limites]
+- La corrida `etapa-limites` (`martes-tranquilo` + `fuga-sin-enlace`) obtuvo **86.7/100** (54.61 de 63 puntos medidos): A1, A4a, A4b, B2, E1, E3, F1 y F2 al 100%; A2 58%, A3 69%, B1 97%, E2 50%. Quedan sin datos tormenta-perfecta, sin-luz, contratista, ataque y libre.
+- Recuperación offline (701 fragmentos, 71 preguntas): hit@5 0,817 (base BM25 0,850), recall@5 0,695 (base 0,660), Rev. C antes que D: 0/71.
 - Permite **builds oficiales** limpios con `docker compose build`
-- Permite **evaluación contra la verdad** con [COMPLETAR: cantidad real de tests]
+- Permite **evaluación contra la verdad** con 129 tests (80 subtests)
 - Respeta las **restricciones de hardware** (4 núcleos, 8 GB, sin GPU)
 - Elimina **dependencias externas** durante la corrección (el enlace de red se puede cortar)
