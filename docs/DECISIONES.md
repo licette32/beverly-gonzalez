@@ -46,6 +46,10 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 **Consecuencias:** las tareas de interpretación están acotadas con esquemas Pydantic y reglas fijas; no hay variabilidad en las decisiones de seguridad ni en la clasificación de novedades.
 
+## D4. (sin uso)
+
+Número reservado; no hay decisión registrada.
+
 ## D5. Idempotencia y persistencia
 
 **Decisión:** usar identificadores deterministas con UUIDv5, restricciones `unique`, una tabla de outbox y un registro de eventos y órdenes.
@@ -88,13 +92,13 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 ## D9. RAG documental
 
-**Decisión:** el RAG documental queda diferido en la Entrega 1. `rag.py` e `indexado.py` implementan búsqueda BM25 en memoria sobre los fragmentos de documentos de la planta, pero no están conectados a `main.py` ni a `coordinador.py`. No se implementan chunking en producción, índice vectorial ni recall@k. Postgres usa la imagen `pgvector/pgvector:pg16` para dejar la extensión disponible en una entrega futura. Los límites, el stock y el catálogo de tareas no salen de RAG: se consultan por API, SQL o YAML.
+**Decisión:** el RAG documental queda diferido en la Entrega 1. `rag.py` combina BM25 en memoria con vectores TF-IDF propios (`embeddings.py`) y fusiona ambos rankings con RRF (`_rrf`), pero no está conectado a `main.py` ni a `coordinador.py`. No se implementa chunking en producción, no se indexa en pgvector y no se mide recall@k. Postgres usa la imagen `pgvector/pgvector:pg16` para dejar la extensión disponible en una entrega futura. Los límites, el stock y el catálogo de tareas no salen de RAG: se consultan por API, SQL o YAML.
 
 **Alternativas:** implementar pgvector, chunking, búsqueda híbrida y reranking antes del camino crítico.
 
 **Por qué:** el camino crítico de la Entrega 1 (B2, parte, confirmaciones) no necesita recuperación semántica, y el tiempo se priorizó ahí.
 
-**Consecuencias:** `manuales_buscar` devuelve una lista vacía documentada como diferida y no está expuesta en el servidor MCP. El recall@k queda como trabajo pendiente y declarado.
+**Consecuencias:** `manuales_buscar` devuelve una lista vacía documentada como diferida y no está expuesta en el servidor MCP. El recall@k y el índice en pgvector quedan como trabajo pendiente y declarado.
 
 ## D10. Contrato por pip
 

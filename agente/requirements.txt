@@ -2,7 +2,7 @@ paho-mqtt>=2.0,<3
 planta_contrato @ git+https://github.com/NovitSoftware/academia2026-tp.git@ab65b95e911731351dba395817a74a8cc60da2b2#subdirectory=contrato
 faster-whisper==1.2.1
 psycopg[binary]>=3.2,<4
-mcp>=1.0.0
+mcp>=1.0,<2
 pyyaml>=6.0
 pydantic>=2.0
 pytest>=7.0

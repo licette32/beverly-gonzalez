@@ -4,7 +4,7 @@
 
 ### 1.1 Transcripción de audio
 - **Motor:** `faster-whisper` versión 1.2.1
-- **Modelo:** Whisper `base` (aprox. 74 M de parámetros), pesos de OpenAI, cuantizado en `int8`, ejecutado con `faster-whisper` (CTranslate2). Repositorio del modelo: `base` (identificador de `MODELO` en `transcripcion.py`).
+- **Modelo:** Whisper `base` (aprox. 74 M de parámetros), pesos de OpenAI, cuantizado en `int8`, ejecutado con `faster-whisper` (CTranslate2). Repositorio del modelo: [COMPLETAR: confirmar el id exacto que descarga faster-whisper para 'base' (probablemente Systran/faster-whisper-base)].
 - **Parámetros:** `beam_size=5`, `cpu_threads=2`, `OMP_NUM_THREADS=2`, `language="es"`
 - **Prompt de vocabulario:** `PROMPT` personalizado con nombres de equipos, variables y unidades de la planta (incluye "kg/cm2", "psi", "bar", nombres de bombas B-101/B-102/B-103, filtros F-201A/F-201B, valores numéricos en español)
 - **Duración típica:** 4.46 s por nota de ~11 s con `base` beam 1 en hardware de 2 núcleos; el setup actual (beam 5 + 2 threads) queda dentro del presupuesto de B2 (~30 s reales por nota)
@@ -37,9 +37,9 @@
 | Componente | Especificación |
 |------------|----------------|
 | **Hardware** | [COMPLETAR: modelo de PC, CPU, RAM, GPU, SO] |
-| **Docker** | `docker compose` con 3 servicios: `broker`, `enlace`, `sim` + `alumno-novit-agente` |
+| **Docker** | `docker-compose.yml` con 2 servicios: `agente` y `postgres`. La planta (broker, enlace, sim) corre aparte, desde el compose del curso. |
 | **Sistema de Base de Datos** | PostgreSQL 16 con extensión `pgvector` (imagen `pgvector/pgvector:pg16`) |
-| **Entorno de deploy** | `docker compose build --no-cache` para build oficial; imagen `novit-agente:latest` |
+| **Entorno de deploy** | `docker compose build --no-cache` para build oficial |
 
 ### Presupuesto de recursos (medido en i3 de 2 núcleos):
 - **Whisper `base` beam_size=1:** 4.46 s por nota de 11.24 s
@@ -73,7 +73,7 @@ No se evaluó un LLM local. Se descartó por el presupuesto de 8 GB y porque las
 - Modelos en la nube (OpenAI Whisper, etc.) violan la restricción "sin enlace" de B2 (el enlace se cae a los 10 minutos en fuga-sin-enlace)
 
 ### Conclusión general:
-La arquitectura actual optó por un **enfoque híbrido**: Whisper local para la transcripción (único modelo probabilístico en el camino crítico) + reglas deterministas para toda la toma de decisiones (seguridad, parte, confirmaciones, rango histórico). Esta diseño:
+La arquitectura actual optó por un **enfoque híbrido**: Whisper local para la transcripción (único modelo probabilístico en el camino crítico) + reglas deterministas para toda la toma de decisiones (seguridad, parte, confirmaciones, rango histórico). Este diseño:
 - [COMPLETAR: resultados de etapa-limites]
 - Permite **builds oficiales** limpios con `docker compose build`
 - Permite **evaluación contra la verdad** con [COMPLETAR: cantidad real de tests]
