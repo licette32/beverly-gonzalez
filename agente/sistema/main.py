@@ -1,5 +1,7 @@
 import logging
-import threading
+import os
+import subprocess
+import sys
 import time
 
 from planta_contrato import Topicos
@@ -13,6 +15,7 @@ from .config import (
     PLANTA_BASE_URL,
     POSTGRES_DSN,
     SISTEMA,
+    INDEXAR_PG_AL_ARRANCAR,
 )
 from .coordinador import CoordinadorPartes
 from .heartbeat import Latido
@@ -30,21 +33,23 @@ TOPICOS = [
 ]
 
 
-def indexar_documentos() -> None:
-    """Carga e indexa fragmentos en pgvector sin bloquear el arranque."""
-    log = logging.getLogger(__name__)
+def _lanzar_indexado() -> None:
+    """Lanza el indexado como proceso separado; si falla, loguea y sigue."""
     try:
-        from .embeddings import obtener_modelo
-        from .indexado import cargar_desde_api
-        from .indice_pg import crear_tabla, indexar
-
-        fragmentos = cargar_desde_api(PLANTA_BASE_URL)
-        modelo = obtener_modelo([f.texto for f in fragmentos])
-        crear_tabla()
-        indexar(fragmentos, modelo)
-        log.info("Indice pgvector listo: %d fragmentos", len(fragmentos))
+        cmd = [sys.executable, "-m", "sistema.indexar"]
+        log = logging.getLogger(__name__)
+        log.info("Lanzando indexado pgvector: %s", " ".join(cmd))
+        proc = subprocess.Popen(
+            cmd,
+            stdout=log.handlers[0].stream if log.handlers else sys.stdout,
+            stderr=sys.stderr,
+            preexec_fn=lambda: os.nice(19),
+        )
+        log.info("Indexado lanzado en PID %d (continuarÃ© sin esperar)", proc.pid)
     except Exception as exc:
-        log.warning("Indexado pgvector no disponible: %s", exc)
+        logging.getLogger(__name__).warning(
+            "No se pudo lanzar el indexado: %s", exc
+        )
 
 
 def main() -> None:
@@ -80,9 +85,7 @@ def main() -> None:
 
     try:
         repositorio.iniciar()
-        threading.Thread(
-            target=indexar_documentos, name="indexado-pgvector", daemon=True
-        ).start()
+        _lanzar_indexado()
         catalogo.refrescar()
         transcriptor.precargar()
         while True:
