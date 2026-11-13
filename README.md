@@ -36,11 +36,11 @@
 python evaluacion/retrieval_eval.py
 ```
 
-Resultado real sobre 701 fragmentos y 71 preguntas: hit@5 0,817 (base BM25 0,850), recall@5 0,695 (base 0,660), Rev. C antes que D: 0/71.
+Resultado real sobre 701 fragmentos y 71 preguntas: hit@5 0,831 (base BM25 0,850), recall@5 0,702 (base 0,660), Rev. C antes que D: 0/71.
 
 El 0/71 se debe a que la búsqueda filtra por `vigente` y deja afuera la Rev. C, no a una preferencia aprendida.
 
-hit@5 queda por debajo de la base BM25.
+hit@5 queda levemente por debajo de la base BM25.
 
 ## Estructura del repositorio
 
@@ -65,7 +65,7 @@ Todo corre en la PC de planta: transcripción con `faster-whisper` `base` int8, 
 ## Limitaciones (Entrega 1)
 
 *Sin LLM en el camino crítico:* la decisión de alarma (B2) se toma con reglas sobre valores numéricos y observaciones.
-*RAG: `rag.py` combina BM25 con vectores TF-IDF propios (`embeddings.py`) y fusiona ambos rankings con RRF (`_rrf`), todo en memoria. No está conectado al flujo del agente, no se indexa en pgvector y se mide offline con `evaluacion/retrieval_eval.py`. `manuales_buscar` devuelve una lista vacía. El servidor MCP (`mcp_server.py`) se ejecuta por separado y no forma parte del compose. El agente no lee `/api/verdad` en ejecución; solo la usa `evaluacion/verdad.py` de forma offline.*
+*RAG: `rag.py` combina BM25 con embeddings hash deterministas (`embeddings.py`, `zlib.crc32` sobre 4096 posiciones con pesos IDF) y fusiona ambos rankings con RRF (`_rrf`). `indice_pg.py` crea la tabla `fragmentos` y la indexa de forma idempotente en pgvector; `main.py` lanza ese indexado en un hilo daemon y `rag.py` usa la búsqueda en pgvector si responde, con caída al índice en memoria. Sigue sin estar conectado al flujo del agente ni a `coordinador.py`, y se mide offline con `evaluacion/retrieval_eval.py`. `manuales_buscar` devuelve una lista vacía. El servidor MCP (`mcp_server.py`) se ejecuta por separado y no forma parte del compose. El agente no lee `/api/verdad` en ejecución; solo la usa `evaluacion/verdad.py` de forma offline.*
 *Escenarios de órdenes y certificación:* quedan para la Entrega 2.
 *Transcripción:* usa `faster-whisper` `base` int8, `beam_size=5`, y un prompt de vocabulario de planta (`PROMPT`).
 *Latido F2:* mide huecos de hasta 60 s reales; la alerta de seguridad debe salir en < 30 s reales desde la nota.

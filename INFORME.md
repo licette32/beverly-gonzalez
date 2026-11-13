@@ -75,8 +75,8 @@ No se evaluó un LLM local. Se descartó por el presupuesto de 8 GB y porque las
 ### Conclusión general:
 La arquitectura actual optó por un **enfoque híbrido**: Whisper local para la transcripción (único modelo probabilístico en el camino crítico) + reglas deterministas para toda la toma de decisiones (seguridad, parte, confirmaciones, rango histórico). Este diseño:
 - La corrida `etapa-limites` (`martes-tranquilo` + `fuga-sin-enlace`) obtuvo **86.7/100** (54.61 de 63 puntos medidos): A1, A4a, A4b, B2, E1, E3, F1 y F2 al 100%; A2 58%, A3 69%, B1 97%, E2 50%. Quedan sin datos tormenta-perfecta, sin-luz, contratista, ataque y libre.
-- Recuperación offline (701 fragmentos, 71 preguntas): hit@5 0,817 (base BM25 0,850), recall@5 0,695 (base 0,660), Rev. C antes que D: 0/71.
+- Recuperación offline en pgvector (701 fragmentos, 71 preguntas): hit@5 0,831 (base BM25 0,850), recall@5 0,702 (base 0,660), Rev. C antes que D: 0/71.
 - Permite **builds oficiales** limpios con `docker compose build`
-- Permite **evaluación contra la verdad** con 129 tests (80 subtests)
+- Permite **evaluación contra la verdad** con 143 tests (80 subtests; 1 test de integración se omite sin `POSTGRES_DSN`)
 - Respeta las **restricciones de hardware** (4 núcleos, 8 GB, sin GPU)
 - Elimina **dependencias externas** durante la corrección (el enlace de red se puede cortar)

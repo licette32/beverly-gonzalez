@@ -16,6 +16,7 @@ import unicodedata
 from collections import Counter
 from typing import Iterable
 
+from . import config
 from .embeddings import obtener_modelo
 from .indexado import Fragmento, cargar_desde_api
 
@@ -96,12 +97,32 @@ class _Retriever:
             self._bm25_todos = _BM25(self.fragmentos)
         return self._bm25_todos
 
+    def _vectorial_pg(
+        self, pregunta: str, k: int, solo_vigentes: bool
+    ) -> list[tuple[float, str]]:
+        if not config.POSTGRES_DSN:
+            return []
+        try:
+            from . import indice_pg
+
+            return indice_pg.buscar(
+                pregunta,
+                k=k,
+                solo_vigentes=solo_vigentes,
+                modelo=self.modelo,
+            )
+        except Exception:
+            return []
+
     def _vectorial(
         self, pregunta: str, k: int, solo_vigentes: bool = True
     ) -> list[tuple[float, str]]:
         candidatos = [f for f in self.fragmentos if f.vigente or not solo_vigentes]
         if not candidatos:
             return []
+        en_pg = self._vectorial_pg(pregunta, k, solo_vigentes)
+        if en_pg:
+            return en_pg[:k]
         q_emb = self.modelo.embed(pregunta)
         scored: list[tuple[float, str]] = []
         for f in candidatos:

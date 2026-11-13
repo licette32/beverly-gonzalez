@@ -1,7 +1,10 @@
-"""Embeddings TF-IDF en memoria para el RAG de la Entrega 1.
+"""Embeddings por hashing de tokens para el RAG.
 
-No usa modelos externos ni servicios en la nube: construye un vocabulario y
-pesos IDF a partir de los textos recibidos y devuelve vectores normalizados.
+No usa modelos externos ni servicios en la nube. Cada token se proyecta a
+una posicion fija de un vector de dimension `EMBEDDING_DIM` usando
+`zlib.crc32` (determinista entre procesos, a diferencia de `hash()`).
+Sobre esas posiciones se acumulan pesos IDF calculados con los textos
+recibidos y el resultado se normaliza en L2.
 """
 
 from __future__ import annotations
@@ -9,8 +12,11 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
+import zlib
 from collections import Counter
 from typing import Iterable
+
+from .config import EMBEDDING_DIM
 
 
 def _tokens(texto: str) -> list[str]:
@@ -19,30 +25,35 @@ def _tokens(texto: str) -> list[str]:
     return re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", texto)
 
 
-class EmbeddingsTFIDF:
-    """Vectorizador TF-IDF ajustado a una coleccion de textos."""
+def _bucket(token: str, dim: int) -> int:
+    """Posicion estable del token en el vector de dimension fija."""
+    return zlib.crc32(token.encode("utf-8")) % dim
 
-    def __init__(self, textos: Iterable[str]) -> None:
-        documentos = [Counter(_tokens(t)) for t in textos]
-        self._vocabulario = sorted({t for d in documentos for t in d})
-        self._indice = {t: i for i, t in enumerate(self._vocabulario)}
+
+class EmbeddingsHash:
+    """Vectorizador por hashing de tokens con pesos IDF opcionales."""
+
+    def __init__(self, textos: Iterable[str], dim: int | None = None) -> None:
+        self.dim = dim or EMBEDDING_DIM
+        documentos = [{_bucket(t, self.dim) for t in _tokens(texto)} for texto in textos]
         n = len(documentos)
-        df: Counter[str] = Counter(t for d in documentos for t in d)
+        df: Counter[int] = Counter(b for d in documentos for b in d)
         self._idf = {
-            t: math.log((1 + n) / (1 + df[t])) + 1.0 for t in self._vocabulario
+            b: math.log((1 + n) / (1 + c)) + 1.0 for b, c in df.items()
         }
 
     def embed(self, texto: str) -> list[float]:
-        tf = Counter(_tokens(texto))
-        vector = [0.0] * len(self._vocabulario)
-        for token, frecuencia in tf.items():
-            if token in self._indice:
-                vector[self._indice[token]] = frecuencia * self._idf[token]
+        vector = [0.0] * self.dim
+        for token in _tokens(texto):
+            b = _bucket(token, self.dim)
+            peso = self._idf.get(b)
+            if peso is not None:
+                vector[b] += peso
         norma = math.sqrt(sum(x * x for x in vector))
         if norma == 0.0:
             return vector
         return [x / norma for x in vector]
 
 
-def obtener_modelo(textos: Iterable[str]) -> EmbeddingsTFIDF:
-    return EmbeddingsTFIDF(textos)
+def obtener_modelo(textos: Iterable[str]) -> EmbeddingsHash:
+    return EmbeddingsHash(textos)

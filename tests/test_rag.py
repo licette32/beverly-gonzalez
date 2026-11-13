@@ -8,23 +8,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "agente"))
 from agente.sistema import embeddings, indexado, rag  # noqa: E402
 
 
-class TestEmbeddingsTFIDF(unittest.TestCase):
+class TestEmbeddingsHash(unittest.TestCase):
     def test_mismo_texto_misma_vector(self):
-        e = embeddings.EmbeddingsTFIDF(["la uno esta en ciento quince"])
+        e = embeddings.EmbeddingsHash(["la uno esta en ciento quince"])
         self.assertEqual(e.embed("la uno esta en ciento quince"), e.embed("la uno esta en ciento quince"))
 
     def test_texto_diferente_vector_diferente(self):
-        e = embeddings.EmbeddingsTFIDF(["la dos", "la uno"])
+        e = embeddings.EmbeddingsHash(["la dos", "la uno"])
         self.assertNotEqual(e.embed("la dos"), e.embed("la uno"))
 
     def test_vector_normalizado_l2(self):
-        e = embeddings.EmbeddingsTFIDF(["ciento quince"])
+        e = embeddings.EmbeddingsHash(["ciento quince"])
         v = e.embed("ciento quince")
         self.assertAlmostEqual(sum(x*x for x in v) ** 0.5, 1.0, places=6)
 
     def test_vector_zero_para_vacio(self):
-        e = embeddings.EmbeddingsTFIDF(["algo"])
-        self.assertEqual(e.embed(""), [0.0] * len(e._vocabulario))
+        e = embeddings.EmbeddingsHash(["algo"])
+        self.assertEqual(e.embed(""), [0.0] * e.dim)
 
 
 class TestIndexado(unittest.TestCase):

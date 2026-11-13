@@ -92,13 +92,13 @@ Número reservado; no hay decisión registrada.
 
 ## D9. RAG documental
 
-**Decisión:** el RAG documental queda diferido en la Entrega 1. `rag.py` combina BM25 en memoria con vectores TF-IDF propios (`embeddings.py`) y fusiona ambos rankings con RRF (`_rrf`), pero no está conectado a `main.py` ni a `coordinador.py`. No se implementa chunking en producción, no se indexa en pgvector y no se mide recall@k. Postgres usa la imagen `pgvector/pgvector:pg16` para dejar la extensión disponible en una entrega futura. Los límites, el stock y el catálogo de tareas no salen de RAG: se consultan por API, SQL o YAML.
+**Decisión:** el RAG documental se indexa en pgvector, pero sigue fuera del camino crítico. `embeddings.py` reemplaza el TF-IDF de vocabulario variable por un hashing determinista de tokens (`zlib.crc32(token) % 4096`) con pesos IDF sobre las posiciones, porque no hay un modelo de embeddings en la lista cerrada y así la dimensión queda fija para la columna `vector(4096)`. `indice_pg.py` crea la extensión y la tabla `fragmentos`, y hace altas idempotentes (`ON CONFLICT (id) DO UPDATE`). `main.py` lanza un hilo daemon que carga los fragmentos desde la API de la planta y los indexa después de `repositorio.iniciar()`, sin bloquear el latido ni el worker. `rag._Retriever` usa `indice_pg.buscar` (distancia coseno `<=>` con `statement_timeout`) cuando hay `POSTGRES_DSN` y el índice responde; si falla o no hay filas, cae al índice en memoria. La búsqueda híbrida BM25 + vectorial con RRF (`_rrf`) se mantiene. No está conectado a `coordinador.py`: el flujo de notas no consulta RAG. Los límites, el stock y el catálogo de tareas no salen de RAG: se consultan por API, SQL o YAML.
 
-**Alternativas:** implementar pgvector, chunking, búsqueda híbrida y reranking antes del camino crítico.
+**Alternativas:** dejar solo el índice en memoria; instalar un modelo de embeddings externo; indexar de forma sincrónica en el arranque.
 
-**Por qué:** el camino crítico de la Entrega 1 (B2, parte, confirmaciones) no necesita recuperación semántica, y el tiempo se priorizó ahí.
+**Por qué:** pgvector ya está en la imagen de Postgres y da persistencia sin agregar un servicio; el hashing evita otra dependencia de modelo y mantiene la dimensión fija. Indexar en un hilo aparte conserva el arranque y el latido.
 
-**Consecuencias:** `manuales_buscar` devuelve una lista vacía documentada como diferida y no está expuesta en el servidor MCP. El recall@k y el índice en pgvector quedan como trabajo pendiente y declarado.
+**Consecuencias:** medición offline sobre 701 fragmentos y 71 preguntas: hit@5 0,831 (base BM25 0,850) y recall@5 0,702 (base 0,660); Rev. C antes que D: 0/71 por el filtro `vigente`. `manuales_buscar` sigue devolviendo una lista vacía y no está expuesta en el servidor MCP. El chunking y el reranking quedan pendientes y declarados.
 
 ## D10. Contrato por pip
 

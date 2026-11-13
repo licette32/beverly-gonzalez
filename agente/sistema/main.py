@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 
 from planta_contrato import Topicos
@@ -9,6 +10,7 @@ from .config import (
     LOG_LEVEL,
     MQTT_HOST,
     MQTT_PORT,
+    PLANTA_BASE_URL,
     POSTGRES_DSN,
     SISTEMA,
 )
@@ -26,6 +28,23 @@ TOPICOS = [
     Topicos.RESPUESTAS,
     "planta/sensores/+/+",
 ]
+
+
+def indexar_documentos() -> None:
+    """Carga e indexa fragmentos en pgvector sin bloquear el arranque."""
+    log = logging.getLogger(__name__)
+    try:
+        from .embeddings import obtener_modelo
+        from .indexado import cargar_desde_api
+        from .indice_pg import crear_tabla, indexar
+
+        fragmentos = cargar_desde_api(PLANTA_BASE_URL)
+        modelo = obtener_modelo([f.texto for f in fragmentos])
+        crear_tabla()
+        indexar(fragmentos, modelo)
+        log.info("Indice pgvector listo: %d fragmentos", len(fragmentos))
+    except Exception as exc:
+        log.warning("Indexado pgvector no disponible: %s", exc)
 
 
 def main() -> None:
@@ -61,6 +80,9 @@ def main() -> None:
 
     try:
         repositorio.iniciar()
+        threading.Thread(
+            target=indexar_documentos, name="indexado-pgvector", daemon=True
+        ).start()
         catalogo.refrescar()
         transcriptor.precargar()
         while True:
