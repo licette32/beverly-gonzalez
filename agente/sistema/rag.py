@@ -75,7 +75,12 @@ class _Retriever:
     def __init__(self, fragmentos: list[Fragmento]) -> None:
         self.fragmentos = fragmentos
         self.por_id = {f.id: f for f in fragmentos}
-        self._modelo = None
+        # Los embeddings se calculan una sola vez al construir el retriever:
+        # recalcularlos en cada consulta costaba más de 2 s con 701 fragmentos.
+        self._modelo = obtener_modelo([f.texto for f in fragmentos])
+        self._embeddings = {
+            f.id: self._modelo.embed(f.texto) for f in fragmentos
+        }
         self._bm25_vigente: _BM25 | None = None
         self._bm25_todos: _BM25 | None = None
 
@@ -126,8 +131,7 @@ class _Retriever:
         q_emb = self.modelo.embed(pregunta)
         scored: list[tuple[float, str]] = []
         for f in candidatos:
-            emb = self.modelo.embed(f.texto)
-            scored.append((_coseno(q_emb, emb), f.id))
+            scored.append((_coseno(q_emb, self._embeddings[f.id]), f.id))
         scored.sort(key=lambda x: x[0], reverse=True)
         return scored[:k]
 
