@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import urllib.parse
 import urllib.request
 from typing import Any, Optional, List
@@ -14,7 +15,16 @@ from pydantic.config import ConfigDict
 # Exposed for testing (can be patched with unittest.mock)
 PLANTA_BASE_URL = os.getenv("PLANTA_BASE_URL", "http://sim:8100")
 
-from .config import CATALOGO_TIMEOUT_S, HISTORIAN_TIMEOUT_S, PREGUNTA_TIMEOUT_S
+from .config import (
+    CATALOGO_TIMEOUT_S,
+    HISTORIAN_TIMEOUT_S,
+    MANUALES_DOCS,
+    MANUALES_SECCIONES_EXCLUIDAS,
+    MANUALES_TEXTO_MAX,
+    MANUALES_TIMEOUT_S,
+    MANUALES_TIPOS,
+    PREGUNTA_TIMEOUT_S,
+)
 
 
 class ErrorInfo(Exception):
@@ -82,6 +92,15 @@ class HistorialOrdenesRequest(BaseModel):
 class HistorialOrdenesResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ordenes: List[dict[str, Any]] = Field(default_factory=list)
+
+
+class ManualEncontrado(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    cita: str
+    documento: str
+    seccion: str
+    texto: str
+    vigente: bool
 
 
 def _url(path: str) -> str:
@@ -156,6 +175,89 @@ def tareas_catalogo() -> List[dict[str, Any]]:
     return []
 
 
-def manuales_buscar(texto: str) -> List[dict[str, Any]]:
-    """Búsqueda en manuales: vacía y documentada como diferida."""
-    return []
+def _buscar_manuales_en_hilo(texto: str) -> list[str]:
+    """Ejecuta rag.buscar en un hilo daemon y corta a los MANUALES_TIMEOUT_S."""
+    from . import rag
+
+    resultado: dict[str, Any] = {}
+
+    def objetivo() -> None:
+        try:
+            resultado["citas"] = rag.buscar(texto, k=5)
+        except BaseException as exc:  # noqa: BLE001
+            resultado["error"] = exc
+
+    hilo = threading.Thread(target=objetivo, name="manuales-buscar", daemon=True)
+    hilo.start()
+    hilo.join(MANUALES_TIMEOUT_S)
+    if hilo.is_alive():
+        raise ErrorInfo(
+            codigo="MANUALES_TIMEOUT",
+            mensaje=f"búsqueda de manuales superó {MANUALES_TIMEOUT_S} s",
+            reintentable=True,
+        )
+    if "error" in resultado:
+        raise ErrorInfo(
+            codigo="MANUALES_ERROR",
+            mensaje=str(resultado["error"]),
+            reintentable=True,
+        )
+    return resultado.get("citas") or []
+
+
+def _fragmentos_manuales() -> dict[str, Any]:
+    from . import rag
+
+    try:
+        return rag._obtener_retriever().por_id
+    except Exception as exc:
+        raise ErrorInfo(
+            codigo="MANUALES_ERROR", mensaje=str(exc), reintentable=True
+        )
+
+
+def _manuales_una_vez(texto: str) -> List[ManualEncontrado]:
+    citas = _buscar_manuales_en_hilo(texto)
+    por_id = _fragmentos_manuales()
+    encontrados: List[ManualEncontrado] = []
+    for cita in citas:
+        fragmento = por_id.get(cita)
+        if fragmento is None:
+            continue
+        if not fragmento.vigente:
+            continue
+        if fragmento.tipo not in MANUALES_TIPOS:
+            continue
+        if fragmento.doc not in MANUALES_DOCS:
+            continue
+        if fragmento.id in MANUALES_SECCIONES_EXCLUIDAS:
+            continue
+        encontrados.append(
+            ManualEncontrado(
+                cita=fragmento.id,
+                documento=fragmento.doc,
+                seccion=fragmento.numero,
+                texto=fragmento.texto[:MANUALES_TEXTO_MAX],
+                vigente=bool(fragmento.vigente),
+            )
+        )
+    return encontrados
+
+
+def manuales_buscar(texto: str) -> List[ManualEncontrado]:
+    """Busca en manuales vigentes de PIA-3, con timeout y un reintento.
+
+    Devuelve lista vacía para consulta vacía o sin resultados. Ante timeout o
+    fallo de búsqueda levanta ErrorInfo reintentable, igual que las demás tools.
+    """
+    if not texto or not texto.strip():
+        return []
+    ultimo: ErrorInfo | None = None
+    for intento in range(2):
+        try:
+            return _manuales_una_vez(texto)
+        except ErrorInfo as exc:
+            ultimo = exc
+            if not exc.reintentable or intento == 1:
+                raise
+    raise ultimo  # pragma: no cover

@@ -64,5 +64,15 @@ def historial_ordenes(tag: str | None = None, orden_id: str | None = None) -> li
         return []
 
 
+@mcp.tool()
+def manuales_buscar(texto: str) -> list[dict]:
+    """Busca en los manuales vigentes de la planta."""
+    from .tools import manuales_buscar as buscar
+    try:
+        return [encontrado.model_dump() for encontrado in buscar(texto)]
+    except Exception:
+        return []
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

@@ -17,3 +17,22 @@ HISTORIAN_TIMEOUT_S = float(os.getenv("HISTORIAN_TIMEOUT_S", "5"))
 PREGUNTA_TIMEOUT_S = float(os.getenv("PREGUNTA_TIMEOUT_S", "60"))
 TRANSCRIPCION_LIMITE_S = float(os.getenv("TRANSCRIPCION_LIMITE_S", "90"))
 MAX_CORRECCIONES = int(os.getenv("MAX_CORRECCIONES", "5"))
+
+MANUALES_TIMEOUT_S = float(os.getenv("MANUALES_TIMEOUT_S", "15"))
+MANUALES_TEXTO_MAX = int(os.getenv("MANUALES_TEXTO_MAX", "400"))
+MANUALES_TIPOS = frozenset({"manual_fabricante", "manual_operadora"})
+MANUALES_DOCS = frozenset({"TX350-D", "MBP-4", "FC48-3"})
+
+# Secciones dedicadas a modelos o plantas que no aplican a PIA-3 (Anexo,
+# "trampas del corpus"). No incluye secciones mixtas como TX350-D §1.1/§2.1,
+# MBP-4 §1.1/§5.3, FC48-3 §2.1 o CT-SVP-2025 §1.1: mezclan contenido valido
+# con menciones a otros modelos y se devuelven completas.
+MANUALES_SECCIONES_EXCLUIDAS = frozenset(
+    {
+        "TX350-D §3.3",
+        "MBP-4 §17",
+        "MBP-4 §17.1",
+        "MBP-4 §17.2",
+        "MBP-4 §17.3",
+    }
+)

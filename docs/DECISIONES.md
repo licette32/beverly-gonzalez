@@ -98,7 +98,7 @@ Número reservado; no hay decisión registrada.
 
 **Por qué:** pgvector ya está en la imagen de Postgres y da persistencia sin agregar un servicio; el hashing evita otra dependencia de modelo y mantiene la dimensión fija. Indexar en un hilo aparte conserva el arranque y el latido.
 
-**Consecuencias:** medición offline sobre 701 fragmentos y 71 preguntas: hit@5 0,831 (base BM25 0,850) y recall@5 0,702 (base 0,660); Rev. C antes que D: 0/71 por el filtro `vigente`. `manuales_buscar` sigue devolviendo una lista vacía y no está expuesta en el servidor MCP. El chunking y el reranking quedan pendientes y declarados.
+**Consecuencias:** medición offline sobre 701 fragmentos y 71 preguntas: hit@5 0,831 (base BM25 0,850) y recall@5 0,702 (base 0,660); Rev. C antes que D: 0/71 por el filtro `vigente`. `manuales_buscar` ahora filtra por metadatos (tipo, doc, vigente) e id de sección dedicada; está expuesto en el servidor MCP `mcp_server.py`. El chunking y el reranking quedan pendientes y declarados.
 
 ## D10. Contrato por pip
 

@@ -14,6 +14,7 @@ class TestMCPServer(unittest.TestCase):
         self.assertIn("catalogo_planta", tool_names)
         self.assertIn("stock", tool_names)
         self.assertIn("historial_ordenes", tool_names)
+        self.assertIn("manuales_buscar", tool_names)
 
     def test_call_tool_equipos(self):
         result = asyncio.run(mcp.call_tool("equipos", {}))
@@ -39,6 +40,12 @@ class TestMCPServer(unittest.TestCase):
         metadata = result[1] if isinstance(result, tuple) else {}
         result_list = metadata.get("result", []) if isinstance(metadata, dict) else []
         self.assertIsInstance(result_list, list)
+
+    def test_call_tool_manuales_buscar_vacio(self):
+        result = asyncio.run(mcp.call_tool("manuales_buscar", {"texto": ""}))
+        metadata = result[1] if isinstance(result, tuple) else {}
+        result_list = metadata.get("result", []) if isinstance(metadata, dict) else []
+        self.assertEqual(result_list, [])
 
     def test_no_server_launch(self):
         """Forbidden: test that does not launch the server and wait for stdout."""
