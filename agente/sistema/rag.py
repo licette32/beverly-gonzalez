@@ -41,7 +41,7 @@ class _BM25:
         }
         self.k1, self.b = k1, b
 
-    def buscar(self, pregunta: str, k: int) -> list[tuple[str, float]]:
+    def buscar(self, pregunta: str, k: int) -> list[tuple[float, str]]:
         q = _tokens(pregunta)
         puntajes: list[tuple[float, str]] = []
         for i, d in enumerate(self.docs):
@@ -98,7 +98,7 @@ class _Retriever:
 
     def _vectorial(
         self, pregunta: str, k: int, solo_vigentes: bool = True
-    ) -> list[tuple[str, float]]:
+    ) -> list[tuple[float, str]]:
         candidatos = [f for f in self.fragmentos if f.vigente or not solo_vigentes]
         if not candidatos:
             return []
@@ -111,10 +111,10 @@ class _Retriever:
         return scored[:k]
 
     @staticmethod
-    def _rrf(listas: list[list[tuple[str, float]]]) -> list[str]:
+    def _rrf(listas: list[list[tuple[float, str]]]) -> list[str]:
         scores: dict[str, float] = {}
         for lista in listas:
-            for pos, (cid, _puntos) in enumerate(lista):
+            for pos, (_puntos, cid) in enumerate(lista):
                 scores[cid] = scores.get(cid, 0.0) + 1.0 / (60 + pos + 1)
         orden = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         return [cid for cid, _ in orden]

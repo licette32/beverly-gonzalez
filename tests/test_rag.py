@@ -78,3 +78,45 @@ class TestIndexado(unittest.TestCase):
             self.assertTrue(all("embedding" in r and r["embedding"] is None for r in rows))
         finally:
             tmp.unlink(missing_ok=True)
+
+
+def _fragmento(id: str, texto: str, vigente: bool = True) -> indexado.Fragmento:
+    return indexado.Fragmento(
+        id=id,
+        doc=id.split()[0],
+        numero="1",
+        titulo="Prueba",
+        texto=texto,
+        vigente=vigente,
+        pagina=None,
+        tipo="manual",
+        archivo=None,
+    )
+
+
+class TestRetriever(unittest.TestCase):
+    def test_rag_buscar_devuelve_ids_unicos_y_k(self):
+        fragmentos = [
+            _fragmento("TX350-D §3.2", "vibracion alta en la bomba triplex"),
+            _fragmento("TX350-D §4.1", "presion de descarga y filtro"),
+            _fragmento("TX350-C §3.2", "vibracion alta version vieja", vigente=False),
+            _fragmento("historial OT-25-0026", "se cambio la bomba por vibracion"),
+        ]
+        anterior = rag._retriever
+        rag._retriever = rag._Retriever(fragmentos)
+        try:
+            resultado = rag.buscar("vibracion bomba", k=3)
+        finally:
+            rag._retriever = anterior
+        self.assertIsInstance(resultado, list)
+        self.assertLessEqual(len(resultado), 3)
+        self.assertTrue(all(isinstance(cita, str) for cita in resultado))
+        ids = {f.id for f in fragmentos}
+        self.assertTrue(set(resultado).issubset(ids))
+        self.assertEqual(len(resultado), len(set(resultado)))
+
+    def test_rrf_prioriza_el_id_primero_en_ambas_listas(self):
+        lista_a = [(10.0, "TX350-D §3.2"), (5.0, "TX350-C §3.2")]
+        lista_b = [(9.0, "TX350-D §3.2"), (1.0, "historial OT-25-0026")]
+        resultado = rag._Retriever._rrf([lista_a, lista_b])
+        self.assertEqual(resultado[0], "TX350-D §3.2")
