@@ -26,10 +26,9 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 ## D2. Transcripción
 
-**Decisi�n:** usar `faster-whisper` con modelo `base` en int8, `beam_size=5`, `cpu_threads=2` y `OMP_NUM_THREADS=2`. El modelo se hornea en la imagen y se carga con `local_files_only=True`. El prompt de vocabulario de planta `PROMPT` se pasa a la transcripci�n para mejorar reconocimiento de equipos y valores.
+**Decisión:** usar `faster-whisper` con modelo `base` en int8, `beam_size=5`, `cpu_threads=2` y `OMP_NUM_THREADS=2`. El modelo se hornea en la imagen y se carga con `local_files_only=True`. El prompt de vocabulario de planta `PROMPT` se pasa a la transcripción para mejorar reconocimiento de equipos y valores.
 
-**Alternativas:** `small` con beam 5; `small` con beam 1; `medium`; transcripci�n en la nube.
-**Por qu�:** medido en la i3 de 2 n�cleos con la misma nota de 11,24 s, `small` con beam 1 tard� 19,77 s y `base` con beam 1 tard� 4,46 s; `small` con beam 5 tard� 24,87 s. `small` no entra
+**Alternativas:** `small` con beam 5; `small` con beam 1; `medium`; transcripción en la nube.
 
 **Por qué:** medido en la i3 de 2 núcleos con la misma nota de 11,24 s, `small` con beam 1 tardó 19,77 s y `base` con beam 1 tardó 4,46 s; `small` con beam 5 tardó 24,87 s. `small` no entra en el presupuesto de B2 ni con beam 1. `base` con `OMP_NUM_THREADS=2` evita la sobresuscripción de CTranslate2 y deja la transcripción dentro del camino crítico. La descarga en caliente no es aceptable en corrección.
 
@@ -38,14 +37,14 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 **Nota:** Entrega 1 sin LLM en el camino crítico; interpretación determinista.
 
 ## D3. Sin modelo de lenguaje en la Entrega 1
-**Decisi�n:** en la Entrega 1 no se utiliza ning�n modelo de lenguaje (LLM). La interpretaci�n de partes, detecci�n de seguridad y clasificaci�n de novedades se implementancomo reglas deterministas en c�digo. El modelo Whisper solo se usa para transcripci�n local.\n**Alternativas:** para la Entrega 2, se podr�a integrar un modelo LLM local opcional detr�s del broker.\n**Por qu�:** el presupuesto de memoria (8 GB) y la necesidad de latencia predecible (B2 < 30 s) hacen impr�ctico un LLM en el camino cr�tico. La arquitectura h�brida Whisper + reglas garantiza predicci�n de tiempo y cumplimiento de criterios A1-A4b, B1, B2, F1-F2.\n**Consecuencias:** las tareas de interpretaci�n est�n acotadas con esquemas Pydantic y reglas fijas; no hay variabilidad en las decisiones de seguridad ni en la clasificaci�n de novedades.\n
-**Decisión:** las reglas de seguridad S1-S4, los límites de alarma y la clasificación de novedad se implementan en código. El LLM solo interpreta el texto y propone datos estructurados.
 
-**Alternativas:** pedirle al LLM que decida si hay una situación insegura o si corresponde escalar.
+**Decisión:** en la Entrega 1 no se utiliza ningún modelo de lenguaje (LLM). La interpretación de partes, la detección de seguridad y la clasificación de novedades se implementan como reglas deterministas en código. El modelo Whisper solo se usa para transcripción local.
 
-**Por qué:** la seguridad no puede depender de la variabilidad de un modelo. La corrección mide alertas, tiempos y falsos positivos.
+**Alternativas:** para la Entrega 2 se podría integrar un modelo LLM local opcional detrás del broker.
 
-**Consecuencias:** S1 es pérdida con proyección de agua a presión; S2 es olor a gas; S3 es humo u olor a quemado en un motor; S4 es persona lesionada. La detección debe ser rápida y no esperar al LLM.
+**Por qué:** el presupuesto de memoria (8 GB) y la necesidad de latencia predecible (B2 < 30 s) hacen impráctico un LLM en el camino crítico. La arquitectura Whisper + reglas garantiza predicción de tiempo y decisiones reproducibles.
+
+**Consecuencias:** las tareas de interpretación están acotadas con esquemas Pydantic y reglas fijas; no hay variabilidad en las decisiones de seguridad ni en la clasificación de novedades.
 
 ## D5. Idempotencia y persistencia
 
@@ -69,7 +68,7 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 ## D7. Transcripción completa antes del detector
 
-**Decisión:** recibir el audio completo, transcribir la nota entera, ejecutar inmediatamente el detector determinista S1-S4 y recién después lanzar el LLM para estructurar el parte.
+**Decisión:** recibir el audio completo, transcribir la nota entera, ejecutar inmediatamente el detector determinista S1-S4 y recién después estructurar el parte con reglas deterministas.
 
 **Alternativas:** transcribir en parciales y lanzar el detector sobre la transcripción parcial.
 
@@ -77,15 +76,25 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 **Consecuencias:** la latencia de la alerta depende de la transcripción completa. Si se mide que la transcripción supera aproximadamente 20 segundos, se rediscute la estrategia. La alerta y el aviso de tablet deben salir dentro de los 30 segundos reales que exige B2.
 
-## D8. Sin uso de Ollama en la Entrega 1
-**Decisi�n:** en la Entrega 1 no se utiliza Ollama ni ning�n modelo LLM en el camino cr�tico. La configuraci�n de proxy HTTP solo se aplica al agente para conexi�n con el broker MQTT y al servicio de planta. No se configura Ollama ni ning�n servicio LLM externo.\n**Alternativas:** para la Entrega 2, Ollama podr�a integrarse como servicio opcional detr�s del broker.\n**Por qu�:** la Entrega 1 corre completamente local sin dependencias de servicios externos; el circuito de voz, detecci�n y alerta funcionan con reglas deterministas y Whisper local.\n**Consecuencias:** se elimina la dependencia de Ollama y su configuraci�n de red; el sistema es aut�nomo para la Entrega 1.\n
-**Decisión:** el RAG documental queda diferido en la Entrega 1. No se implementan chunking, índice vectorial ni recall@k. Postgres usa la imagen `pgvector/pgvector:pg16` para dejar la extensión disponible en una entrega futura. Los límites, el stock y el catálogo de tareas no salen de RAG: se consultan por API, SQL o YAML.
+## D8. Ollama y red
+
+**Decisión:** en la Entrega 1 no se usa Ollama ni ningún modelo de lenguaje. La configuración de proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`) es solo para el agente.
+
+**Alternativas:** para la Entrega 2, Ollama podría integrarse como servicio opcional detrás del broker.
+
+**Por qué:** el código del agente (`agente/sistema`) no contiene referencias a Ollama ni a ningún LLM; el circuito de voz, detección y alerta funciona con Whisper local y reglas deterministas. La Entrega 1 corre completamente local.
+
+**Consecuencias:** no hay dependencia de Ollama ni de un servicio LLM externo; el proxy se limita al agente.
+
+## D9. RAG documental
+
+**Decisión:** el RAG documental queda diferido en la Entrega 1. `rag.py` e `indexado.py` implementan búsqueda BM25 en memoria sobre los fragmentos de documentos de la planta, pero no están conectados a `main.py` ni a `coordinador.py`. No se implementan chunking en producción, índice vectorial ni recall@k. Postgres usa la imagen `pgvector/pgvector:pg16` para dejar la extensión disponible en una entrega futura. Los límites, el stock y el catálogo de tareas no salen de RAG: se consultan por API, SQL o YAML.
 
 **Alternativas:** implementar pgvector, chunking, búsqueda híbrida y reranking antes del camino crítico.
 
 **Por qué:** el camino crítico de la Entrega 1 (B2, parte, confirmaciones) no necesita recuperación semántica, y el tiempo se priorizó ahí.
 
-**Consecuencias:** la tool de búsqueda en manuales existe con su contrato, pero devuelve una lista vacía documentada como diferida. El recall@k queda como trabajo pendiente y declarado.
+**Consecuencias:** `manuales_buscar` devuelve una lista vacía documentada como diferida y no está expuesta en el servidor MCP. El recall@k queda como trabajo pendiente y declarado.
 
 ## D10. Contrato por pip
 
@@ -105,7 +114,7 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 **Por qué:** QoS 1 reduce pérdidas sin exigir exactamente-once. El latido cada 30 segundos cumple F2 y no satura el broker. `retain` solo corresponde a estados que la planta necesita al reconectar.
 
-**Consecuencias:** el cliente MQTT debe manejar reintentos y duplicados. El latido debe ser independiente de la transcripción y del LLM.
+**Consecuencias:** el cliente MQTT debe manejar reintentos y duplicados. El latido debe ser independiente de la transcripción y del procesamiento del parte.
 
 ## D12. PostgreSQL
 
@@ -149,7 +158,7 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 ## D16. Proxy del agente
 
-**Decisión:** el servicio `agente` recibe `HTTP_PROXY=http://enlace:3128`, `HTTPS_PROXY=http://enlace:3128` y `NO_PROXY=broker,sim,localhost`, como exige el anexo.
+**Decisión:** el servicio `agente` recibe `HTTP_PROXY=http://enlace:3128`, `HTTPS_PROXY=http://enlace:3128` y `NO_PROXY=broker,sim,localhost,postgres`, como exige el anexo.
 
 **Alternativas:** no configurar proxy y depender del entorno del host.
 
@@ -168,10 +177,9 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 **Consecuencias:** la cola absorbe ráfagas. El aviso usa `espera_respuesta=False`, `nota_ids=[nota.id]` y una fila `condicion_insegura` con `valor=None`; el evento usa `origen="parte"`, `nota_ids=[nota.id]` e id determinista por nota y categoría. Se loguean descarga, transcripción, detección, publicación y total desde la llegada.
 
 ## D18. Whisper horneado, precalentado y recursos
-**Decisi�n:** hornear `faster-whisper` base int8 en la imagen, cargarlo y hacer una transcripci�n de calentamiento. Usar `language="es"`, `beam_size=5`, `cpu_threads=2`, `OMP_NUM_THREADS=2` e `init: true`. El prompt de vocabulario de planta `PROMPT` se incluye en la transcripci�n. Suscribir y arrancar el latido antes de `precargar()`: las notas se reciben y descargan mientras el modelo carga, y `transcribir()` espera el evento `_listo`. Si la precarga falla, el evento se setea igual para desbloquear al worker. Subir el agente a 2 CPU y 2 GB.
 
-**Alternativas:** `small` con beam 5; publicar el primer latido despu�s de la precarga; descargar el modelo al arrancar; usar 1 CPU/1 GB; calentar con la primera nota real.
-**Por qu�:** en la i3 de 2 n�cleos `small` con beam 1 tard� 19,77 s y `base` con beam 1 tard� 4,46 s para la misma nota; el calentamiento deja la primera inferencia dentro de B2. `init: true` evita el contenedor zombie. El latido y la suscripci�n antes de la precarga mantienen F2 y evitan perder notas si la carga tarda. La precarga fallida no debe colgar el hilo de transcripci�n.
+**Decisión:** hornear `faster-whisper` base int8 en la imagen, cargarlo y hacer una transcripción de calentamiento. Usar `language="es"`, `beam_size=5`, `cpu_threads=2`, `OMP_NUM_THREADS=2` e `init: true`. El prompt de vocabulario de planta `PROMPT` se incluye en la transcripción. Suscribir y arrancar el latido antes de `precargar()`: las notas se reciben y descargan mientras el modelo carga, y `transcribir()` espera el evento `_listo`. Si la precarga falla, el evento se setea igual para desbloquear al worker. Subir el agente a 2 CPU y 2 GB.
+
 **Alternativas:** `small` con beam 5; publicar el primer latido después de la precarga; descargar el modelo al arrancar; usar 1 CPU/1 GB; calentar con la primera nota real.
 
 **Por qué:** en la i3 de 2 núcleos `small` con beam 1 tardó 19,77 s y `base` con beam 1 tardó 4,46 s para la misma nota; el calentamiento deja la primera inferencia dentro de B2. `init: true` evita el contenedor zombie. El latido y la suscripción antes de la precarga mantienen F2 y evitan perder notas si la carga tarda. La precarga fallida no debe colgar el hilo de transcripción.
@@ -184,7 +192,7 @@ El primer paso es un servicio `agente` que se conecta al broker, valida los mens
 
 ## Reglas operativas de la Entrega 1
 
-**Latido independiente:** `sistema/estado` se publica desde un hilo o proceso dedicado. La transcripción, la descarga de audio y el LLM nunca pueden bloquearlo. F2 mide huecos de hasta 60 segundos reales.
+**Latido independiente:** `sistema/estado` se publica desde un hilo o proceso dedicado. La transcripción, la descarga de audio y el procesamiento del parte nunca pueden bloquearlo. F2 mide huecos de hasta 60 segundos reales.
 
 **Validación antes de publicar:** todo mensaje de salida se construye con un modelo Pydantic de `planta_contrato` y se valida antes de publicarlo. Si no valida, no se publica y se registra el error.
 
@@ -209,4 +217,3 @@ El primer paso es un servicio `agente` que se conecta al broker, valida los mens
 **Por qué:** el contrato no admite `tag` nulo y no se modifica. El build limpio es lo que va a ejecutar el corrector. Un prompt con frases de escenario sería sobreajuste a la corrección.
 
 **Consecuencias:** el repositorio no contiene `Dockerfile.a-test` ni imágenes locales, y `.gitignore` excluye corridas y volcados. El `PROMPT` es parte del código fuente y viaja con el repositorio.
-

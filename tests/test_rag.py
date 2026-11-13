@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -34,7 +35,7 @@ class TestIndexado(unittest.TestCase):
             {"id": "historial OT-25-0026", "doc": "historial", "numero": "OT-25-0026", "titulo": "Orden", "texto": "cambio de valido", "vigente": True, "pagina": None, "tipo": "historial"},
         ]
         tmp = Path(__file__).parent / "test_frags.jsonl"
-        tmp.write_text("\\n".join(json.dumps(f) for f in fragmentos) + "\\n", encoding="utf-8")
+        tmp.write_text("\n".join(json.dumps(f) for f in fragmentos) + "\n", encoding="utf-8")
         try:
             fs = indexado.cargar_desde_archivo(str(tmp))
             self.assertEqual(len(fs), 3)
@@ -53,7 +54,7 @@ class TestIndexado(unittest.TestCase):
                 "id": "TX350-D §1", "doc": "TX350-D", "numero": "1", "titulo": "Gen",
                 "texto": "x", "vigente": True, "pagina": 1, "tipo": "manual"
             })
-            + "\\n",
+            + "\n",
             encoding="utf-8"
         )
         try:
@@ -63,9 +64,17 @@ class TestIndexado(unittest.TestCase):
             tmp.unlink(missing_ok=True)
 
     def test_para_pgvector_no_inicia_embedding(self):
-        fs = indexado.cargar_desde_archivo(str(Path(__file__).parent / "test_frags.jsonl"))
-        rows = indexado.para_pgvector(fs)
-        self.assertEqual(len(rows), 3)
-        self.assertTrue(all("embedding" in r and r["embedding"] is None for r in rows))
-
-
+        fragmentos = [
+            {"id": "TX350-D §3.2", "doc": "TX350-D", "numero": "3.2", "titulo": "Limites", "texto": "vibracion 7.1", "vigente": True, "pagina": 20, "tipo": "manual"},
+            {"id": "TX350-C §3.2", "doc": "TX350-C", "numero": "3.2", "titulo": "Limites viejos", "texto": "vibracion 4.5", "vigente": False, "pagina": 20, "tipo": "manual"},
+            {"id": "historial OT-25-0026", "doc": "historial", "numero": "OT-25-0026", "titulo": "Orden", "texto": "cambio de valido", "vigente": True, "pagina": None, "tipo": "historial"},
+        ]
+        tmp = Path(__file__).parent / "test_frags_pg.jsonl"
+        tmp.write_text("\n".join(json.dumps(f) for f in fragmentos) + "\n", encoding="utf-8")
+        try:
+            fs = indexado.cargar_desde_archivo(str(tmp))
+            rows = indexado.para_pgvector(fs)
+            self.assertEqual(len(rows), 3)
+            self.assertTrue(all("embedding" in r and r["embedding"] is None for r in rows))
+        finally:
+            tmp.unlink(missing_ok=True)

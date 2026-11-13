@@ -1,4 +1,5 @@
 
+"""
 Exponer `buscar(pregunta, k) -> list[str]` compatible con
 `planta.corpus.evaluar.evaluar(buscar, suite)`.
 
@@ -15,6 +16,7 @@ import unicodedata
 from collections import Counter
 from typing import Iterable
 
+from .embeddings import obtener_modelo
 from .indexado import Fragmento, cargar_desde_api
 
 
@@ -68,7 +70,7 @@ def _coseno(a: list[float], b: list[float]) -> float:
     return num / (na * nb)
 
 
-
+class _Retriever:
     def __init__(self, fragmentos: list[Fragmento]) -> None:
         self.fragmentos = fragmentos
         self.por_id = {f.id: f for f in fragmentos}
@@ -109,10 +111,11 @@ def _coseno(a: list[float], b: list[float]) -> float:
         return scored[:k]
 
     @staticmethod
-    ) -> list[str]:
+    def _rrf(listas: list[list[tuple[str, float]]]) -> list[str]:
         scores: dict[str, float] = {}
         for lista in listas:
             for pos, (cid, _puntos) in enumerate(lista):
+                scores[cid] = scores.get(cid, 0.0) + 1.0 / (60 + pos + 1)
         orden = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         return [cid for cid, _ in orden]
 
@@ -128,6 +131,7 @@ def _coseno(a: list[float], b: list[float]) -> float:
         bm25 = self.bm25_vigente if solo_vigentes else self.bm25_todos
         bm25_top = bm25.buscar(pregunta, k * 3)
         vec_top = self._vectorial(pregunta, k * 3, solo_vigentes=solo_vigentes)
+        fusion = self._rrf([bm25_top, vec_top])
 
         vistos: set[str] = set()
         salida: list[str] = []
@@ -141,10 +145,13 @@ def _coseno(a: list[float], b: list[float]) -> float:
 
 
 # Instancia por defecto perezosa: se pobla al primer buscar().
+_retriever: _Retriever | None = None
 
 
+def _obtener_retriever() -> _Retriever:
     global _retriever
     if _retriever is None:
+        _retriever = _Retriever(cargar_desde_api())
     return _retriever
 
 
@@ -154,7 +161,3 @@ def buscar(pregunta: str, k: int = 5) -> list[str]:
     Devuelve una lista de citas (ids de fragmentos) en orden de relevancia.
     """
     return _obtener_retriever().buscar(pregunta, k)
-
-
-    global _retriever
-    _retriever = None

@@ -1,10 +1,10 @@
-# Mini‑SDD – Flujo del parte (Entrega 1)
+# Mini-SDD – Flujo del parte (Entrega 1)
 
 ## Contexto
-El sistema recibe una `NotaRecorrida` a través de MQTT (`sistema/recorridas`). Cada nota contiene un audio (`audio_url`) de 10‑20 s grabado a 16 kHz mono. El agente debe:
+El sistema recibe una `NotaRecorrida` a través de MQTT (`sistema/recorridas`). Cada nota contiene un audio (`audio_url`) de 10-20 s grabado a 16 kHz mono. El agente debe:
 1. Descargar el audio.
-2. Transcribirlo con `faster‑whisper` (`base` int8, `beam_size=5`, prompt `PROMPT`).
-3. Ejecutar el detector determinista S1‑S4 sobre la transcripción completa.
+2. Transcribirlo con `faster-whisper` (`base` int8, `beam_size=5`, prompt `PROMPT`).
+3. Ejecutar el detector determinista S1-S4 sobre la transcripción completa.
 4. Publicar un `EventoSistema` (tipo `SinNovedad`/`Escalado`) y, si procede, un `MensajeTablet` con un borrador de parte.
 
 ## Restricciones
@@ -13,7 +13,7 @@ El sistema recibe una `NotaRecorrida` a través de MQTT (`sistema/recorridas`). 
 - **Prompt `PROMPT`** contiene solo vocabulario de planta (unidad, equipos, valores). No debe incluir frases de notas de escenario.
 - **Latido F2** se publica desde un hilo independiente; la transcripción, descarga y LLM nunca pueden bloquearlo.
 - **Observaciones** “parada, en reserva” y “parada por mantenimiento” se excluyen de B1.
-- **Tag `SIN‑EQUIPO`** (`TAG_SIN_EQUIPO = "SIN‑EQUIPO"`) se usa en wire cuándo un item no tiene equipo asignado; internamente `ItemParte.tag=None` y B1 con `equipo=None`.
+- **Tag `SIN-EQUIPO`** (`TAG_SIN_EQUIPO = "SIN-EQUIPO"`) se usa en wire cuándo un item no tiene equipo asignado; internamente `ItemParte.tag=None` y B1 con `equipo=None`.
 
 ## Criterios de aceptación (por defecto)
 
@@ -30,7 +30,7 @@ El sistema recibe una `NotaRecorrida` a través de MQTT (`sistema/recorridas`). 
 | **F2 Latido** | El latido `sistema/estado` debe publicarse cada 30 s reales, independientemente de la transcripción. | Se mide el hueco entre latidos. |
 | **E1 Sigue andando sin enlace** | El sistema debe seguir operativo aunque se pierda la conexión con el broker externo. | |
 | **E2 Pendientes visibles** | Las pending deben aparecer en la cola y ser procesadas tras reconexión. | |
-| **E3 Sin duplicados** | El outbox y los UUID deterministas deben evitar la re‑publicación de eventos u órdenes. | |
+| **E3 Sin duplicados** | El outbox y los UUID deterministas deben evitar la re-publicación de eventos u órdenes. | |
 
 ## Ejemplos
 
@@ -42,7 +42,7 @@ El sistema recibe una `NotaRecorrida` a través de MQTT (`sistema/recorridas`). 
   - S2 (olor a gas): falso.  
   - S3 (humo): falso.  
   - S4 (persona lesionada): falso.  
-- Resultado: `EventoSistema { tipo: SinNovedad, equipo: B‑101 }`.
+- Resultado: `EventoSistema { tipo: SinNovedad, equipo: B-101 }`.
 
 ### Ejemplo 2 – Ambiguedad de equipo “la bomba”
 - Audio: “También la bomba está en mil seiscientos psi de descarga.”
@@ -50,7 +50,7 @@ El sistema recibe una `NotaRecorrida` a través de MQTT (`sistema/recorridas`). 
 - Detectores:  
   - `EQUIPOS` incluye `\bla bomba\b -> None`.  
   - `_tag_en` elige `None` porque no hay mención precedente de equipo específico.  
-- Resultado: se publica una **pregunta de equipo** `¿A qué equipo te referís con «bomba»?`. El operador responde “la dos”, y el borrador queda con `B‑102`.
+- Resultado: se publica una **pregunta de equipo** `¿A qué equipo te referís con «bomba»?`. El operador responde “la dos”, y el borrador queda con `B-102`.
 
 ### Ejemplo 3 – Nota de sólo estado
 - Audio: “La bomba está parada, en reserva.”
@@ -64,19 +64,19 @@ El sistema recibe una `NotaRecorrida` a través de MQTT (`sistema/recorridas`). 
 
 | Campo | Dónde se guarda | Tiempo aproximado |
 |-------|----------------|-------------------|
-| `audio_url` | Tabla `audios` (archivo WAV 16 kHz mono) | ↓ 0.5 s (download) |
-| `transcripción` | Tabla `transcripciones` (texto + metadatos) | 4‑5 s con `beam_size=5` + prompt |
+| `audio_url` | Tabla `audios` (archivo WAV 16 kHz mono) | aproximadamente 0.5 s (descarga) |
+| `transcripción` | Tabla `transcripciones` (texto + metadatos) | 4-5 s con `beam_size=5` + prompt |
 | `items_extraídos` | Tabla `items` (ItemParte) | < 0.5 s (parser) |
 | `evento_sistema` | Tabla `eventos_sistema` (PK por UUID determinista) | < 0.2 s (publicación MQTT) |
 | `mensaje_tablet` | Tabla `mensajes_tablet` (cuando procede) | < 0.2 s |
 | `latido` | Publicación `sistema/estado` cada 30 s reales | — |
 
-El tiempo total desde la llegada de la nota hasta tener el evento y el borrador suele estar en el orden de **8‑12 s** para notas cortas (≤ 10 s de audio) y hasta **20‑25 s** para notas largas (≈ 16 s de audio) cuando la transcripción domina el tiempo.
+El tiempo total desde la llegada de la nota hasta tener el evento y el borrador suele estar en el orden de **8-12 s** para notas cortas (≤ 10 s de audio) y hasta **20-25 s** para notas largas (≈ 16 s de audio) cuando la transcripción domina el tiempo.
 
 ## Decisiones de diseño (resumen)
 
-- **Whisper base int8 + beam 5 + PROMPT**: equilibrio entre velocidad (≈ 4‑5 s por nota) y precisión de números y nombres de equipos.  
-- **Reglas deterministas S1‑S4**: garantizan latencia predecible y cumplimiento de B2.  
+- **Whisper base int8 + beam 5 + PROMPT**: equilibrio entre velocidad (≈ 4-5 s por nota) y precisión de números y nombres de equipos.  
+- **Reglas deterministas S1-S4**: garantizan latencia predecible y cumplimiento de B2.  
 - **Outbox + UUIDv5**: idempotencia sin depender de bases de datos distribuidas.  
-- **Tag `SIN‑EQUIPO`**: permite marcar equipos ambiguos sin romper el contrato Pydantic (`FilaParte.tag: str`).  
+- **Tag `SIN-EQUIPO`**: permite marcar equipos ambiguos sin romper el contrato Pydantic (`FilaParte.tag: str`).  
 - **Latido independiente**: hilo separado evita que una transcripción lenta bloquee el sistema.
