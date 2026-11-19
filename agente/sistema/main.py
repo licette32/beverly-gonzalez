@@ -14,6 +14,8 @@ from .config import (
     MQTT_PORT,
     PLANTA_BASE_URL,
     POSTGRES_DSN,
+    SENSORES_HORIZONTE_HORAS,
+    SENSORES_MAX_LECTURAS,
     SISTEMA,
     INDEXAR_PG_AL_ARRANCAR,
 )
@@ -21,6 +23,7 @@ from .coordinador import CoordinadorPartes
 from .heartbeat import Latido
 from .mqtt import ClienteMQTT
 from .repositorio import crear_repositorio
+from .sensores import VentanaSensores
 from .transcripcion import Transcriptor
 from .worker import WorkerNotas
 
@@ -64,8 +67,12 @@ def main() -> None:
     catalogo = CatalogoPlanta()
     coordinador = CoordinadorPartes(cliente, repositorio, catalogo)
     worker = WorkerNotas(cliente, transcriptor, coordinador)
+    ventana_sensores = VentanaSensores(
+        SENSORES_HORIZONTE_HORAS, SENSORES_MAX_LECTURAS
+    )
     cliente.al_recibir_nota = worker.encolar
     cliente.al_recibir_respuesta = coordinador.encolar_respuesta
+    cliente.al_recibir_sensor = ventana_sensores.registrar
 
     # Primero se reciben y descargan las notas y el latido queda vivo; la
     # transcripción espera a que el modelo esté listo. Así no se pierde una nota

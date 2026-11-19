@@ -38,6 +38,7 @@ class ClienteMQTT:
         self._client.on_message = self._on_message
         self.al_recibir_nota: Callable[[NotaRecorrida], None] | None = None
         self.al_recibir_respuesta: Callable[[RespuestaOperador], None] | None = None
+        self.al_recibir_sensor: Callable[[LecturaSensor], None] | None = None
 
     def conectar(self, intentos: int = 30, espera_s: float = 2.0) -> None:
         for intento in range(1, intentos + 1):
@@ -85,8 +86,14 @@ class ClienteMQTT:
         except ValidationError as exc:
             log.error("mensaje inválido en %s: %s", msg.topic, exc)
             return
-        if not msg.topic.startswith("planta/sensores/"):
-            log.info("mensaje válido en %s", msg.topic)
+        if msg.topic.startswith("planta/sensores/"):
+            if self.al_recibir_sensor is not None:
+                try:
+                    self.al_recibir_sensor(datos)
+                except Exception:
+                    log.exception("no se pudo registrar la lectura de sensor")
+            return
+        log.info("mensaje válido en %s", msg.topic)
         if msg.topic == Topicos.RECORRIDAS and self.al_recibir_nota is not None:
             try:
                 self.al_recibir_nota(datos)
