@@ -151,6 +151,42 @@ class EstadoPlanta:
                 )
         return self._excluidos
 
+    def estado_bombas(self) -> dict[str, str] | None:
+        """Estado actual de cada bomba, leído fresco de /api/estado.
+
+        Devuelve ``{tag: estado}`` sin normalizar (marcha, parada,
+        mantenimiento, disparo). Ante cualquier fallo de red, JSON o formato
+        devuelve ``None``: el llamador debe tratar la reserva como no
+        confirmada.
+        """
+        url = urllib.parse.urljoin(PLANTA_BASE_URL, "/api/estado")
+        try:
+            datos = self._leer(url)
+            return self.bombas_desde_datos(datos)
+        except Exception as exc:
+            log.warning("no se pudo leer el estado de las bombas: %s", exc)
+            return None
+
+    @staticmethod
+    def bombas_desde_datos(datos: dict) -> dict[str, str]:
+        if not isinstance(datos, dict):
+            raise ValueError("la respuesta de /api/estado no es un objeto")
+        bombas = datos.get("bombas")
+        if not isinstance(bombas, list):
+            raise ValueError("la respuesta de /api/estado no trae una lista de bombas")
+        estados: dict[str, str] = {}
+        for bomba in bombas:
+            if not isinstance(bomba, dict):
+                raise ValueError("bomba inválida en /api/estado")
+            tag = bomba.get("tag")
+            estado = bomba.get("estado")
+            if not isinstance(tag, str) or not tag:
+                raise ValueError("bomba sin tag en /api/estado")
+            if not isinstance(estado, str) or not estado:
+                raise ValueError(f"bomba {tag} sin estado en /api/estado")
+            estados[tag] = estado
+        return estados
+
     @staticmethod
     def desde_datos(datos: dict) -> frozenset[str]:
         excluidos = {

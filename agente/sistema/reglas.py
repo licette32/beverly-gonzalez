@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -62,6 +63,37 @@ def _pedidos_validos(orden: OrdenSistema) -> tuple[dict[str, float], bool]:
     return pedidos, invalida
 
 
+def calcular_detiene_equipo(
+    tareas_orden: Sequence[str], tareas: Sequence[dict[str, Any]]
+) -> bool:
+    """Si alguna tarea de la orden detiene el equipo (código desconocido falla cerrado)."""
+    por_codigo = _tareas_por_codigo(list(tareas))
+    return any(_detiene(codigo, por_codigo) for codigo in tareas_orden)
+
+
+def calcular_reduce_inyeccion(
+    equipo: str,
+    tareas_orden: Sequence[str],
+    estado_bombas: Mapping[str, str] | None,
+    tareas: Sequence[dict[str, Any]],
+) -> bool:
+    """Reduce si la tarea detiene el equipo y no hay reserva confirmada.
+
+    Con ``estado_bombas`` desconocido (``None``) la reserva no está confirmada.
+    Solo una bomba en ``"marcha"`` con otra en ``"parada"`` da reserva; una
+    bomba en mantenimiento o disparada no cuenta como reserva.
+    """
+    if not calcular_detiene_equipo(tareas_orden, tareas):
+        return False
+    if estado_bombas is None:
+        return True
+    return estado_bombas.get(equipo) == "marcha" and not any(
+        estado == "parada"
+        for tag, estado in estado_bombas.items()
+        if tag != equipo
+    )
+
+
 def evaluar(orden: OrdenSistema, contexto: ContextoReglas) -> tuple[EstadoOrden, str]:
     """Aplica las reglas de aprobación del planificador.
 
@@ -89,19 +121,8 @@ def evaluar(orden: OrdenSistema, contexto: ContextoReglas) -> tuple[EstadoOrden,
     if not orden.tareas or any(tarea not in codigos for tarea in orden.tareas):
         fallan.append("TAREA_NO_ESTANDAR")
 
-    por_codigo = _tareas_por_codigo(contexto.tareas)
-    detiene = any(_detiene(tarea, por_codigo) for tarea in orden.tareas)
-    bombas = contexto.estado_bombas
-    reduce_calculado = detiene and (
-        bombas is None
-        or (
-            bombas.get(orden.equipo) == "marcha"
-            and not any(
-                estado == "parada"
-                for tag, estado in bombas.items()
-                if tag != orden.equipo
-            )
-        )
+    reduce_calculado = calcular_reduce_inyeccion(
+        orden.equipo, orden.tareas, contexto.estado_bombas, contexto.tareas
     )
     if orden.reduce_inyeccion or reduce_calculado:
         fallan.append("REDUCE_INYECCION")

@@ -1,6 +1,6 @@
 import unittest
 
-from sistema.catalogo import CatalogoPlanta
+from sistema.catalogo import CatalogoPlanta, EstadoPlanta
 
 
 DATOS = {
@@ -24,6 +24,76 @@ DATOS = {
         },
     ]
 }
+
+
+class EstadoPlantaFalso(EstadoPlanta):
+    def __init__(self, respuestas) -> None:
+        super().__init__()
+        self.respuestas = list(respuestas)
+        self.leidas = 0
+
+    def _leer(self, url):
+        self.leidas += 1
+        respuesta = self.respuestas.pop(0)
+        if isinstance(respuesta, Exception):
+            raise respuesta
+        return respuesta
+
+
+MUESTRA_BOMBAS = {
+    "ts": "2026-11-20T14:15:53-03:00",
+    "bombas": [
+        {"tag": "B-101", "estado": "marcha", "pd": 113.3},
+        {"tag": "B-102", "estado": "parada", "pd": 1.7},
+        {"tag": "B-103", "estado": "mantenimiento", "pd": 0.0},
+        {"tag": "B-104", "estado": "disparo", "pd": 0.0},
+    ],
+}
+
+
+class TestEstadoBombas(unittest.TestCase):
+    def test_pass_through_de_los_cuatro_estados(self):
+        estado = EstadoPlantaFalso([MUESTRA_BOMBAS])
+        self.assertEqual(
+            estado.estado_bombas(),
+            {
+                "B-101": "marcha",
+                "B-102": "parada",
+                "B-103": "mantenimiento",
+                "B-104": "disparo",
+            },
+        )
+
+    def test_lee_fresco_en_cada_llamada(self):
+        primera = {"bombas": [{"tag": "B-101", "estado": "marcha"}]}
+        segunda = {"bombas": [{"tag": "B-101", "estado": "parada"}]}
+        estado = EstadoPlantaFalso([primera, segunda])
+        self.assertEqual(estado.estado_bombas(), {"B-101": "marcha"})
+        self.assertEqual(estado.estado_bombas(), {"B-101": "parada"})
+        self.assertEqual(estado.leidas, 2)
+
+    def test_fallo_de_lectura_devuelve_none(self):
+        estado = EstadoPlantaFalso([RuntimeError("sin enlace")])
+        self.assertIsNone(estado.estado_bombas())
+
+    def test_json_invalido_devuelve_none(self):
+        estado = EstadoPlantaFalso([ValueError("JSON inválido")])
+        self.assertIsNone(estado.estado_bombas())
+
+    def test_formato_invalido_devuelve_none(self):
+        invalidos = [
+            [],
+            {"bombas": "B-101"},
+            {"bombas": [{"tag": "B-101"}]},
+            {"bombas": [{"estado": "marcha"}]},
+            {"bombas": [{"tag": "", "estado": "marcha"}]},
+            {"bombas": [{"tag": "B-101", "estado": 3}]},
+            {"bombas": ["B-101"]},
+        ]
+        estado = EstadoPlantaFalso(invalidos)
+        for datos in invalidos:
+            with self.subTest(datos=datos):
+                self.assertIsNone(estado.estado_bombas())
 
 
 class TestCatalogo(unittest.TestCase):
