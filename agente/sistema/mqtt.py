@@ -37,6 +37,7 @@ class ClienteMQTT:
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
         self.al_recibir_nota: Callable[[NotaRecorrida], None] | None = None
+        self.al_recibir_cierre: Callable[[NotaCierre], None] | None = None
         self.al_recibir_respuesta: Callable[[RespuestaOperador], None] | None = None
         self.al_recibir_sensor: Callable[[LecturaSensor], None] | None = None
 
@@ -99,6 +100,11 @@ class ClienteMQTT:
                 self.al_recibir_nota(datos)
             except Exception:
                 log.exception("no se pudo encolar la nota")
+        elif msg.topic == Topicos.CIERRES and self.al_recibir_cierre is not None:
+            try:
+                self.al_recibir_cierre(datos)
+            except Exception:
+                log.exception("no se pudo encolar el cierre")
         elif msg.topic == Topicos.RESPUESTAS and self.al_recibir_respuesta is not None:
             try:
                 self.al_recibir_respuesta(datos)

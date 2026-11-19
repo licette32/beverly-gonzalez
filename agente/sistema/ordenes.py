@@ -22,8 +22,18 @@ from .reglas import (
     evaluar,
 )
 from .tools import StockItem, stock, tareas_catalogo
+from .transiciones import validar_cambio
 
 NAMESPACE = uuid.NAMESPACE_URL
+
+
+class ErrorEstadoEsperado(Exception):
+    def __init__(self, orden_id: str, estado_esperado: EstadoOrden) -> None:
+        super().__init__(
+            f"estado esperado {estado_esperado.value} no coincide para orden {orden_id}"
+        )
+        self.orden_id = orden_id
+        self.estado_esperado = estado_esperado
 
 
 @dataclass(frozen=True)
@@ -69,6 +79,12 @@ class RepositorioOrdenes(Protocol):
     """Persistencia de órdenes para la publicación y la reanudación."""
 
     def guardar(self, orden: OrdenSistema) -> None: ...
+
+    def guardar_si_estado(
+        self, orden: OrdenSistema, estado_esperado: EstadoOrden
+    ) -> bool: ...
+
+    def obtener(self, orden_id: str) -> OrdenSistema | None: ...
 
     def cargar_pendientes(self) -> Sequence[OrdenSistema]: ...
 
@@ -156,30 +172,47 @@ def _contexto_reglas(
 
 def publicar_orden(
     orden: OrdenSistema,
-    contexto: ContextoOrden,
-    publicador: Callable[[str, BaseModel], None],
+    contexto: ContextoOrden | None = None,
+    publicador: Callable[[str, BaseModel], None] | None = None,
     registro: RegistroOrdenes | None = None,
     repositorio: RepositorioOrdenes | None = None,
+    *,
+    estado_esperado: EstadoOrden | None = None,
 ) -> OrdenSistema | None:
     """Publica en ``sistema/ordenes`` la orden ya decidida.
 
-    Si llega en Borrador, la evalúa y publica la copia decidida (Aprobada o
-    PendienteAprobacion); un Borrador nunca se publica. Si ``registro`` ya
-    tiene publicado el mismo estado para ese id, no republica; un cambio de
-    estado sí se publica con el mismo id. Con ``repositorio``, la orden
-    decidida se guarda antes de publicarse; si el guardado falla, no publica.
+    Si llega en Borrador, ``reglas.evaluar`` decide el estado y la tabla de
+    transiciones solo valida ese destino. Con ``estado_esperado``, valida el
+    cambio desde ese estado y guarda con comparación condicional antes de
+    publicar. Si el guardado condicional falla, no publica.
     """
+    if publicador is None:
+        raise ValueError("publicador obligatorio")
+
     if orden.estado == EstadoOrden.borrador:
+        if contexto is None:
+            raise ValueError("contexto obligatorio para evaluar un Borrador")
         estado, motivo = evaluar(orden, _contexto_reglas(orden, contexto))
         decidida = orden.model_copy(
             update={"estado": estado, "motivo": motivo}
         )
+        if estado_esperado is None:
+            validar_cambio(decidida, estado, origen=EstadoOrden.borrador)
     else:
         decidida = orden
+
+    if estado_esperado is not None:
+        validar_cambio(decidida, decidida.estado, origen=estado_esperado)
+
     if registro is not None and registro.get(decidida.id) == decidida.estado:
         return None
+
     if repositorio is not None:
-        repositorio.guardar(decidida)
+        if estado_esperado is None:
+            repositorio.guardar(decidida)
+        elif not repositorio.guardar_si_estado(decidida, estado_esperado):
+            raise ErrorEstadoEsperado(decidida.id, estado_esperado)
+
     publicador(Topicos.ORDENES, decidida)
     if registro is not None:
         registro.set(decidida.id, decidida.estado)

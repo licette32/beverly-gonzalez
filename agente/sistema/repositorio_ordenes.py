@@ -38,6 +38,12 @@ ON CONFLICT (id) DO UPDATE SET
     actualizado_ts = EXCLUDED.actualizado_ts
 """
 
+SQL_GUARDAR_SI_ESTADO = """
+UPDATE ordenes
+SET correlation_id = %s, estado = %s, payload = %s::jsonb, actualizado_ts = %s
+WHERE id = %s AND estado = %s
+"""
+
 SQL_OBTENER = """
 SELECT payload FROM ordenes WHERE id = %s
 """
@@ -129,6 +135,26 @@ class RepositorioOrdenesPostgres:
                 datetime.now(timezone.utc),
             ),
         )
+
+    def guardar_si_estado(
+        self, orden: OrdenSistema, estado_esperado: EstadoOrden
+    ) -> bool:
+        payload = orden.model_dump(mode="json")
+        correlation_id = orden.evento_ids[0] if orden.evento_ids else orden.id
+        filas = self._ejecutar(
+            "guardar orden condicionado a estado",
+            SQL_GUARDAR_SI_ESTADO,
+            (
+                correlation_id,
+                orden.estado.value,
+                json.dumps(payload, ensure_ascii=False),
+                datetime.now(timezone.utc),
+                orden.id,
+                estado_esperado.value,
+            ),
+            fetch=lambda cursor: cursor.rowcount,
+        )
+        return filas == 1
 
     def obtener(self, orden_id: str) -> OrdenSistema | None:
         fila = self._ejecutar(

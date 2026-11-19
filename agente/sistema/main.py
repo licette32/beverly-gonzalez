@@ -8,6 +8,7 @@ from planta_contrato import Topicos
 
 from .anomalias import ParametrosDeteccion
 from .catalogo import CatalogoPlanta
+from .cierres import ManejadorCierres
 from .config import (
     HEARTBEAT_S,
     INDEXAR_PG_AL_ARRANCAR,
@@ -97,6 +98,14 @@ def main() -> None:
     cliente.al_recibir_nota = worker.encolar
     cliente.al_recibir_respuesta = coordinador.encolar_respuesta
     cliente.al_recibir_sensor = worker_sensores.encolar
+    if repositorio_ordenes is not None:
+        cliente.al_recibir_cierre = ManejadorCierres(
+            repositorio_ordenes, cliente.publicar
+        )
+    else:
+        logging.getLogger(__name__).warning(
+            "sin repositorio de órdenes: los cierres no se procesan"
+        )
 
     # Primero se reciben y descargan las notas y el latido queda vivo; la
     # transcripción espera a que el modelo esté listo. Así no se pierde una nota

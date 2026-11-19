@@ -14,6 +14,7 @@ from planta_contrato import (
 from sistema.alertas import eventos_seguridad
 from sistema.ordenes import (
     ContextoOrden,
+    ErrorEstadoEsperado,
     RegistroOrdenesMemoria,
     construir_orden,
     publicar_orden,
@@ -22,6 +23,7 @@ from sistema.reglas import MOTIVO_APROBADA
 from sistema.repositorio_ordenes import ErrorPersistenciaOrden
 from sistema.seguridad import Deteccion
 from sistema.tools import stock, tareas_catalogo
+from sistema.transiciones import ErrorTransicion
 
 TS = datetime(2026, 11, 20, 14, 0, tzinfo=timezone.utc)
 BOMBAS_CON_RESERVA = {"B-101": "marcha", "B-102": "parada", "B-103": "marcha"}
@@ -47,16 +49,31 @@ class PublicadorEventos(PublicadorFalso):
 
 
 class RepositorioOrdenesFalso:
-    def __init__(self, eventos=None, error=None) -> None:
+    def __init__(self, eventos=None, error=None, estados_actuales=None) -> None:
         self.eventos = [] if eventos is None else eventos
         self.guardadas = []
         self.error = error
+        self.estados_actuales = {} if estados_actuales is None else estados_actuales
 
     def guardar(self, orden) -> None:
         self.eventos.append("guardar")
         if self.error is not None:
             raise self.error
         self.guardadas.append(orden)
+
+    def guardar_si_estado(self, orden, estado_esperado) -> bool:
+        self.eventos.append("guardar_si_estado")
+        if self.error is not None:
+            raise self.error
+        actual = self.estados_actuales.get(orden.id, estado_esperado)
+        if actual is not estado_esperado:
+            return False
+        self.guardadas.append(orden)
+        self.estados_actuales[orden.id] = orden.estado
+        return True
+
+    def obtener(self, orden_id):
+        return None
 
     def cargar_pendientes(self):
         return []
@@ -421,6 +438,16 @@ class TestPublicarOrdenConRepositorio(unittest.TestCase):
         self.assertEqual(repositorio.guardadas, [decidida])
         self.assertNotEqual(decidida.estado, EstadoOrden.borrador)
 
+    def test_publicar_orden_guarda_una_sola_vez_sin_estado_esperado(self):
+        orden, ctx = self._orden_y_contexto()
+        eventos = []
+        repositorio = RepositorioOrdenesFalso(eventos)
+        publicador = PublicadorEventos(eventos)
+
+        publicar_orden(orden, ctx, publicador, None, repositorio)
+
+        self.assertEqual(repositorio.eventos, ["guardar", "publicar"])
+
     def test_publicar_orden_con_repo_que_falla(self):
         orden, ctx = self._orden_y_contexto()
         error = ErrorPersistenciaOrden("guardar orden", RuntimeError("api caida"))
@@ -432,6 +459,66 @@ class TestPublicarOrdenConRepositorio(unittest.TestCase):
 
         self.assertEqual(publicador.publicados, [])
         self.assertEqual(repositorio.eventos, ["guardar"])
+
+    def test_publicar_orden_con_estado_esperado_guarda_condicional(self):
+        orden, _ = self._orden_y_contexto()
+        aprobada = orden.model_copy(update={"estado": EstadoOrden.aprobada})
+        eventos = []
+        repositorio = RepositorioOrdenesFalso(eventos)
+        publicador = PublicadorEventos(eventos)
+
+        decidida = publicar_orden(
+            aprobada,
+            None,
+            publicador,
+            None,
+            repositorio,
+            estado_esperado=EstadoOrden.pendiente,
+        )
+
+        self.assertIsNotNone(decidida)
+        self.assertEqual(eventos, ["guardar_si_estado", "publicar"])
+        self.assertEqual(repositorio.guardadas, [decidida])
+
+    def test_publicar_orden_valida_cambio_por_tabla(self):
+        orden, _ = self._orden_y_contexto()
+        aprobada = orden.model_copy(update={"estado": EstadoOrden.aprobada})
+        repositorio = RepositorioOrdenesFalso()
+        publicador = PublicadorEventos([])
+
+        with self.assertRaises(ErrorTransicion):
+            publicar_orden(
+                aprobada,
+                None,
+                publicador,
+                None,
+                repositorio,
+                estado_esperado=EstadoOrden.rechazada,
+            )
+
+        self.assertEqual(repositorio.eventos, [])
+        self.assertEqual(publicador.publicados, [])
+
+    def test_publicar_orden_sin_update_condicional_no_publica(self):
+        orden, _ = self._orden_y_contexto()
+        aprobada = orden.model_copy(update={"estado": EstadoOrden.aprobada})
+        repositorio = RepositorioOrdenesFalso(
+            estados_actuales={orden.id: EstadoOrden.cerrada}
+        )
+        publicador = PublicadorEventos([])
+
+        with self.assertRaises(ErrorEstadoEsperado):
+            publicar_orden(
+                aprobada,
+                None,
+                publicador,
+                None,
+                repositorio,
+                estado_esperado=EstadoOrden.pendiente,
+            )
+
+        self.assertEqual(repositorio.eventos, ["guardar_si_estado"])
+        self.assertEqual(publicador.publicados, [])
 
 
 class TestFotos(unittest.TestCase):

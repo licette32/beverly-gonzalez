@@ -86,6 +86,25 @@ class TestRepositorioOrdenesPostgres(unittest.TestCase):
             self.repositorio.obtener(orden_id).estado, EstadoOrden.rechazada
         )
 
+    def test_guardar_si_estado_actualiza_solo_si_coincide(self):
+        orden_id = _id("condicional")
+        self.ids.append(orden_id)
+        self.repositorio.guardar(_orden(orden_id, EstadoOrden.pendiente))
+        aprobada = _orden(orden_id, EstadoOrden.aprobada)
+
+        self.assertTrue(
+            self.repositorio.guardar_si_estado(
+                aprobada, EstadoOrden.pendiente
+            )
+        )
+        self.assertEqual(self.repositorio.obtener(orden_id).estado, EstadoOrden.aprobada)
+        self.assertFalse(
+            self.repositorio.guardar_si_estado(
+                _orden(orden_id, EstadoOrden.cerrada), EstadoOrden.pendiente
+            )
+        )
+        self.assertEqual(self.repositorio.obtener(orden_id).estado, EstadoOrden.aprobada)
+
     def test_obtener_tras_nueva_instancia(self):
         orden = _orden(_id("nueva-instancia"), EstadoOrden.aprobada)
         self.ids.append(orden.id)

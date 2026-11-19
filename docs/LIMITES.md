@@ -22,3 +22,25 @@ rondas. Al llegar a un límite el agente avisa a la tablet y se detiene.
 - Los avisos de corte tienen un id determinista por motivo y nota, así que
   repetirlos no genera duplicados.
 - Los valores por defecto se pueden cambiar por variable de entorno en el compose.
+
+## Límites de transiciones y CLI
+
+- `Observada` no tiene salientes: no se implementó responder la observación ni
+  volver a certificar desde ese estado.
+- `certificar` no calcula el monto: la CLI recibe `--habilita` y `--monto`;
+  `transicionar` valida el formato `HAB-AAAA-NNNN` y que el monto sea mayor que
+  cero, pero no consulta la lista de precios CT-SVP-2025.
+- `--por NOMBRE` es obligatorio y se escribe en el log de la CLI. No hay
+  autenticación, autorización por rol ni bitácora persistente del operador.
+- No hay reintentos, deadlines ni bucles para cierre, certificación u órdenes de
+  la CLI. Un error se informa y se devuelve código 1.
+- La idempotencia multi-proceso depende de `estado_esperado`: `publicar_orden`
+  usa `guardar_si_estado` con `UPDATE ... WHERE id AND estado`. Sin ese valor no
+  hay comparación condicional.
+
+Los comandos están pensados para ejecutarse dentro del contenedor, por
+ejemplo:
+
+```text
+docker compose exec agente python -m sistema.cli aprobar ORDEN_ID --por NOMBRE
+```

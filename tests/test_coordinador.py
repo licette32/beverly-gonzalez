@@ -36,6 +36,12 @@ class RepositorioOrdenesFalso:
     def guardar(self, orden):
         return None
 
+    def guardar_si_estado(self, orden, estado_esperado):
+        return True
+
+    def obtener(self, orden_id):
+        return None
+
     def cargar_pendientes(self):
         self.llamadas += 1
         if self.error is not None:
