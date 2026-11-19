@@ -81,6 +81,17 @@ class TestVentanaSensores(unittest.TestCase):
             (lectura(10), lectura(20)),
         )
 
+    def test_ts_duplicado_se_descarta(self):
+        ventana = VentanaSensores(horizonte_horas=6, max_lecturas=100)
+        primera = lectura(0, valor=1.0)
+        duplicada = lectura(0, valor=2.0)
+        ventana.registrar(primera)
+        ventana.registrar(duplicada)
+
+        self.assertEqual(
+            ventana.ventana("B-102", "presion_descarga"), (primera,)
+        )
+
     def test_concurrencia_basica(self):
         ventana = VentanaSensores(horizonte_horas=24, max_lecturas=1000)
         errores = []

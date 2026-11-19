@@ -26,6 +26,8 @@ class VentanaSensores:
             if ventana is None:
                 ventana = deque(maxlen=self._max_lecturas)
                 self._ventanas[clave] = ventana
+            elif ventana and lectura.ts == ventana[-1].ts:
+                return
             elif ventana and lectura.ts < ventana[-1].ts:
                 log.debug(
                     "lectura fuera de orden descartada en %s/%s: %s anterior a %s",
