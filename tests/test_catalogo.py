@@ -54,6 +54,42 @@ class TestCatalogo(unittest.TestCase):
         )
         self.assertIsNone(self.catalogo.unidad_manometro(None))
 
+    def test_limites_de_sensores(self):
+        catalogo = CatalogoPlanta.desde_datos(
+            {
+                "sensores": [
+                    {
+                        "tag": "B-101",
+                        "variable": "presion_descarga",
+                        "alarma_alta": 125,
+                        "alarma_baja": 95,
+                        "disparo": 90,
+                    },
+                    {
+                        "tag": "B-102",
+                        "variable": "vibracion",
+                        "alarma_alta": 7.1,
+                        "disparo": 11.2,
+                    },
+                    {
+                        "tag": "B-103",
+                        "variable": "presion_succion",
+                    },
+                ]
+            }
+        )
+
+        self.assertEqual(
+            catalogo.limites,
+            {
+                ("B-101", "presion_descarga"): {
+                    "alarma_alta": 125.0,
+                    "alarma_baja": 95.0,
+                },
+                ("B-102", "vibracion"): {"alarma_alta": 7.1},
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

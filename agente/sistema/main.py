@@ -6,20 +6,25 @@ import time
 
 from planta_contrato import Topicos
 
+from .anomalias import ParametrosDeteccion
 from .catalogo import CatalogoPlanta
 from .config import (
     HEARTBEAT_S,
+    INDEXAR_PG_AL_ARRANCAR,
     LOG_LEVEL,
     MQTT_HOST,
     MQTT_PORT,
     PLANTA_BASE_URL,
     POSTGRES_DSN,
+    SENSORES_ANOMALIA_MINIMO,
+    SENSORES_ANOMALIA_SPAN_MIN,
+    SENSORES_ANOMALIA_VENTANA_MIN,
     SENSORES_HORIZONTE_HORAS,
     SENSORES_MAX_LECTURAS,
     SISTEMA,
-    INDEXAR_PG_AL_ARRANCAR,
 )
 from .coordinador import CoordinadorPartes
+from .eventos_sensores import WorkerSensores
 from .heartbeat import Latido
 from .mqtt import ClienteMQTT
 from .repositorio import crear_repositorio
@@ -70,15 +75,26 @@ def main() -> None:
     ventana_sensores = VentanaSensores(
         SENSORES_HORIZONTE_HORAS, SENSORES_MAX_LECTURAS
     )
+    worker_sensores = WorkerSensores(
+        cliente,
+        ventana_sensores,
+        catalogo.limites,
+        ParametrosDeteccion(
+            SENSORES_ANOMALIA_VENTANA_MIN,
+            SENSORES_ANOMALIA_MINIMO,
+            SENSORES_ANOMALIA_SPAN_MIN,
+        ),
+    )
     cliente.al_recibir_nota = worker.encolar
     cliente.al_recibir_respuesta = coordinador.encolar_respuesta
-    cliente.al_recibir_sensor = ventana_sensores.registrar
+    cliente.al_recibir_sensor = worker_sensores.encolar
 
     # Primero se reciben y descargan las notas y el latido queda vivo; la
     # transcripción espera a que el modelo esté listo. Así no se pierde una nota
     # si la carga tarda. Postgres se conecta después, en segundo plano.
     cliente.conectar()
     worker.start()
+    worker_sensores.start()
     coordinador.iniciar()
     cliente.suscribir(TOPICOS)
 
@@ -102,6 +118,8 @@ def main() -> None:
     finally:
         latido.detener()
         latido.join(timeout=2)
+        worker_sensores.detener()
+        worker_sensores.join(timeout=2)
         coordinador.detener()
         repositorio.detener()
         worker.detener()

@@ -13,6 +13,8 @@ from .parte import normalizar
 
 log = logging.getLogger(__name__)
 
+ESTADOS_EXCLUIDOS = frozenset({"parada", "mantenimiento"})
+
 
 @dataclass(frozen=True)
 class Equipo:
@@ -23,8 +25,13 @@ class Equipo:
 
 
 class CatalogoPlanta:
-    def __init__(self, equipos: list[Equipo] | None = None) -> None:
+    def __init__(
+        self,
+        equipos: list[Equipo] | None = None,
+        limites: dict[tuple[str, str], dict[str, float]] | None = None,
+    ) -> None:
         self.equipos = equipos or []
+        self.limites = limites or {}
 
     @classmethod
     def desde_datos(cls, datos: dict) -> CatalogoPlanta:
@@ -39,7 +46,16 @@ class CatalogoPlanta:
                     unidad_manometro=manometro.get("unidad"),
                 )
             )
-        return cls(equipos)
+        limites = {}
+        for sensor in datos.get("sensores", []):
+            valores = {
+                clave: float(sensor[clave])
+                for clave in ("alarma_alta", "alarma_baja")
+                if sensor.get(clave) is not None
+            }
+            if valores:
+                limites[(sensor["tag"], sensor["variable"])] = valores
+        return cls(equipos, limites)
 
     def refrescar(self) -> None:
         url = urllib.parse.urljoin(PLANTA_BASE_URL, "/api/planta")
@@ -47,7 +63,10 @@ class CatalogoPlanta:
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             with opener.open(url, timeout=CATALOGO_TIMEOUT_S) as respuesta:
                 datos = json.load(respuesta)
-            self.equipos = self.desde_datos(datos).equipos
+            nuevo = self.desde_datos(datos)
+            self.equipos = nuevo.equipos
+            self.limites.clear()
+            self.limites.update(nuevo.limites)
             log.info("catálogo de planta cargado: %s equipos", len(self.equipos))
         except Exception as exc:
             log.warning("no se pudo cargar /api/planta: %s", exc)
@@ -107,6 +126,50 @@ class CatalogoPlanta:
             if equipo.tag == tag:
                 return equipo.nombres[0] if equipo.nombres else equipo.tag
         return None
+
+
+class EstadoPlanta:
+    def __init__(self) -> None:
+        self._excluidos: frozenset[str] | None = None
+
+    def ultimo(self) -> frozenset[str] | None:
+        return self._excluidos
+
+    def excluidos(self) -> frozenset[str] | None:
+        url = urllib.parse.urljoin(PLANTA_BASE_URL, "/api/estado")
+        try:
+            datos = self._leer(url)
+            self._excluidos = self.desde_datos(datos)
+        except Exception as exc:
+            if self._excluidos is None:
+                log.warning(
+                    "no se pudo leer /api/estado y no hay estado previo: %s", exc
+                )
+            else:
+                log.warning(
+                    "no se pudo leer /api/estado; se usa el último estado: %s", exc
+                )
+        return self._excluidos
+
+    @staticmethod
+    def desde_datos(datos: dict) -> frozenset[str]:
+        excluidos = {
+            bomba["tag"]
+            for bomba in datos.get("bombas", [])
+            if bomba.get("tag") and bomba.get("estado") in ESTADOS_EXCLUIDOS
+        }
+        excluidos.update(
+            filtro["tag"]
+            for filtro in datos.get("filtros", [])
+            if filtro.get("tag") and filtro.get("en_cambio") is True
+        )
+        return frozenset(excluidos)
+
+    @staticmethod
+    def _leer(url: str) -> dict:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url, timeout=CATALOGO_TIMEOUT_S) as respuesta:
+            return json.load(respuesta)
 
 
 def historian_rango(
