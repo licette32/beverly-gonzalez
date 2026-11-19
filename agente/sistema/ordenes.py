@@ -65,6 +65,14 @@ class RegistroOrdenesMemoria:
         self._estados[orden_id] = estado
 
 
+class RepositorioOrdenes(Protocol):
+    """Persistencia de órdenes para la publicación y la reanudación."""
+
+    def guardar(self, orden: OrdenSistema) -> None: ...
+
+    def cargar_pendientes(self) -> Sequence[OrdenSistema]: ...
+
+
 def _id_orden(equipo: str, evento_ids: Sequence[str]) -> str:
     clave = f"pia3:orden:{equipo}:{','.join(sorted(evento_ids))}"
     return str(uuid.uuid5(NAMESPACE, clave))
@@ -151,13 +159,15 @@ def publicar_orden(
     contexto: ContextoOrden,
     publicador: Callable[[str, BaseModel], None],
     registro: RegistroOrdenes | None = None,
+    repositorio: RepositorioOrdenes | None = None,
 ) -> OrdenSistema | None:
     """Publica en ``sistema/ordenes`` la orden ya decidida.
 
     Si llega en Borrador, la evalúa y publica la copia decidida (Aprobada o
     PendienteAprobacion); un Borrador nunca se publica. Si ``registro`` ya
     tiene publicado el mismo estado para ese id, no republica; un cambio de
-    estado sí se publica con el mismo id.
+    estado sí se publica con el mismo id. Con ``repositorio``, la orden
+    decidida se guarda antes de publicarse; si el guardado falla, no publica.
     """
     if orden.estado == EstadoOrden.borrador:
         estado, motivo = evaluar(orden, _contexto_reglas(orden, contexto))
@@ -168,6 +178,8 @@ def publicar_orden(
         decidida = orden
     if registro is not None and registro.get(decidida.id) == decidida.estado:
         return None
+    if repositorio is not None:
+        repositorio.guardar(decidida)
     publicador(Topicos.ORDENES, decidida)
     if registro is not None:
         registro.set(decidida.id, decidida.estado)

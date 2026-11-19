@@ -1,8 +1,16 @@
 import time
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
-from planta_contrato import NotaRecorrida, RespuestaOperador, Topicos
+from planta_contrato import (
+    EstadoOrden,
+    NotaRecorrida,
+    OrdenSistema,
+    Repuesto,
+    RespuestaOperador,
+    Topicos,
+)
 
 from sistema.catalogo import CatalogoPlanta
 from sistema.coordinador import CoordinadorPartes
@@ -17,6 +25,37 @@ class ClienteFalso:
 
     def publicar(self, topico, modelo):
         self.publicados.append((topico, modelo))
+
+
+class RepositorioOrdenesFalso:
+    def __init__(self, pendientes=(), error=None):
+        self.pendientes = list(pendientes)
+        self.error = error
+        self.llamadas = 0
+
+    def guardar(self, orden):
+        return None
+
+    def cargar_pendientes(self):
+        self.llamadas += 1
+        if self.error is not None:
+            raise self.error
+        return list(self.pendientes)
+
+
+def orden_para_reanudar(orden_id, estado) -> OrdenSistema:
+    return OrdenSistema(
+        id=orden_id,
+        ts=datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc),
+        estado=estado,
+        equipo="B-101",
+        evento_ids=[f"evt-{orden_id}"],
+        tareas=["T-B-ACE"],
+        detiene_equipo=False,
+        reduce_inyeccion=False,
+        ejecutor="propio",
+        repuestos=[Repuesto(codigo="ACE-ISO220", cantidad=1)],
+    )
 
 
 def nota(nota_id="NOTA-00010") -> NotaRecorrida:
@@ -115,6 +154,75 @@ class TestCoordinador(unittest.TestCase):
         self.assertIsNone(estado.pregunta)
         self.assertIn("sin respuesta del operador", estado.borrador[0].observacion)
         self.assertTrue(any(evento.equipo is None for evento in self.eventos()))
+
+
+class TestCoordinadorReanudacion(unittest.TestCase):
+    def setUp(self):
+        self.cliente = ClienteFalso()
+        self.catalogo = CatalogoPlanta.desde_datos(DATOS)
+
+    def _coordinador(self, repositorio_ordenes=None, cliente=None):
+        return CoordinadorPartes(
+            ClienteFalso() if cliente is None else cliente,
+            RepositorioMemoria(),
+            self.catalogo,
+            repositorio_ordenes=repositorio_ordenes,
+        )
+
+    def test_coordinador_sin_repo_no_toca_postgres(self):
+        with patch("sistema.coordinador.log.info") as info:
+            coordinador = self._coordinador()
+            coordinador.iniciar()
+        try:
+            self.assertIsNone(coordinador._repositorio_ordenes)
+            self.assertEqual(self.cliente.publicados, [])
+            self.assertFalse(
+                any("reanudación" in str(llamada) for llamada in info.call_args_list)
+            )
+        finally:
+            coordinador.detener()
+
+    def test_coordinador_con_repo_fake_loguea_dos(self):
+        borrador = orden_para_reanudar("ORD-BORRADOR", EstadoOrden.borrador)
+        pendiente = orden_para_reanudar("ORD-PENDIENTE", EstadoOrden.pendiente)
+        repositorio = RepositorioOrdenesFalso([borrador, pendiente])
+
+        with self.assertLogs("sistema.coordinador", level="INFO") as logs:
+            coordinador = self._coordinador(
+                repositorio_ordenes=repositorio, cliente=self.cliente
+            )
+        try:
+            texto = "\n".join(logs.output)
+            self.assertIn("orden borrador reanudada sin publicar", texto)
+            self.assertIn(borrador.id, texto)
+            self.assertIn("orden pendiente reanudada", texto)
+            self.assertIn(pendiente.id, texto)
+            self.assertIn("total=2 pendientes=1 borradores=1", texto)
+            self.assertEqual(self.cliente.publicados, [])
+            self.assertEqual(repositorio.llamadas, 1)
+            self.assertEqual(
+                [orden.estado for orden in repositorio.pendientes],
+                [EstadoOrden.borrador, EstadoOrden.pendiente],
+            )
+        finally:
+            coordinador.detener()
+
+    def test_coordinador_con_repo_que_falla_arranca(self):
+        repositorio = RepositorioOrdenesFalso(error=RuntimeError("api caida"))
+
+        with self.assertLogs("sistema.coordinador", level="ERROR") as logs:
+            coordinador = self._coordinador(
+                repositorio_ordenes=repositorio, cliente=self.cliente
+            )
+        try:
+            self.assertIn(
+                "no se pudieron reanudar órdenes pendientes: api caida",
+                "\n".join(logs.output),
+            )
+            coordinador.iniciar()
+            self.assertEqual(self.cliente.publicados, [])
+        finally:
+            coordinador.detener()
 
 
 if __name__ == "__main__":

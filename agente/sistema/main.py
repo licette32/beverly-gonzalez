@@ -28,6 +28,7 @@ from .eventos_sensores import WorkerSensores
 from .heartbeat import Latido
 from .mqtt import ClienteMQTT
 from .repositorio import crear_repositorio
+from .repositorio_ordenes import RepositorioOrdenesPostgres
 from .sensores import VentanaSensores
 from .transcripcion import Transcriptor
 from .worker import WorkerNotas
@@ -69,8 +70,16 @@ def main() -> None:
     transcriptor = Transcriptor()
     cliente = ClienteMQTT(MQTT_HOST, MQTT_PORT, SISTEMA)
     repositorio = crear_repositorio(POSTGRES_DSN)
+    repositorio_ordenes = (
+        RepositorioOrdenesPostgres(POSTGRES_DSN) if POSTGRES_DSN else None
+    )
     catalogo = CatalogoPlanta()
-    coordinador = CoordinadorPartes(cliente, repositorio, catalogo)
+    coordinador = CoordinadorPartes(
+        cliente,
+        repositorio,
+        catalogo,
+        repositorio_ordenes=repositorio_ordenes,
+    )
     worker = WorkerNotas(cliente, transcriptor, coordinador)
     ventana_sensores = VentanaSensores(
         SENSORES_HORIZONTE_HORAS, SENSORES_MAX_LECTURAS

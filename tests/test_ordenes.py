@@ -19,6 +19,7 @@ from sistema.ordenes import (
     publicar_orden,
 )
 from sistema.reglas import MOTIVO_APROBADA
+from sistema.repositorio_ordenes import ErrorPersistenciaOrden
 from sistema.seguridad import Deteccion
 from sistema.tools import stock, tareas_catalogo
 
@@ -33,6 +34,32 @@ class PublicadorFalso:
 
     def __call__(self, topico, modelo) -> None:
         self.publicados.append((topico, modelo))
+
+
+class PublicadorEventos(PublicadorFalso):
+    def __init__(self, eventos) -> None:
+        super().__init__()
+        self.eventos = eventos
+
+    def __call__(self, topico, modelo) -> None:
+        self.eventos.append("publicar")
+        super().__call__(topico, modelo)
+
+
+class RepositorioOrdenesFalso:
+    def __init__(self, eventos=None, error=None) -> None:
+        self.eventos = [] if eventos is None else eventos
+        self.guardadas = []
+        self.error = error
+
+    def guardar(self, orden) -> None:
+        self.eventos.append("guardar")
+        if self.error is not None:
+            raise self.error
+        self.guardadas.append(orden)
+
+    def cargar_pendientes(self):
+        return []
 
 
 def evento_sensor(equipo="B-101", evento_id="EV-SENSOR-1"):
@@ -355,6 +382,56 @@ class TestPublicarOrden(unittest.TestCase):
         tercera = publicar_orden(aprobada, ctx, publicador, registro)
         self.assertIsNone(tercera)
         self.assertEqual(len(publicador.publicados), 2)
+
+
+class TestPublicarOrdenConRepositorio(unittest.TestCase):
+    def _orden_y_contexto(self):
+        evento = evento_sensor()
+        orden = construir_orden(
+            evento,
+            "B-101",
+            ["T-B-VAL"],
+            ejecutor="propio",
+            repuestos=[Repuesto(codigo="TX-VAL-KIT", cantidad=1)],
+            estado_bombas=BOMBAS_TODAS_EN_MARCHA,
+        )
+        ctx = contexto(evento=evento, estado_bombas=BOMBAS_TODAS_EN_MARCHA)
+        return orden, ctx
+
+    def test_publicar_orden_sin_repo(self):
+        orden, ctx = self._orden_y_contexto()
+        publicador = PublicadorFalso()
+        registro = RegistroOrdenesMemoria()
+
+        decidida = publicar_orden(orden, ctx, publicador, registro)
+
+        self.assertIsNotNone(decidida)
+        self.assertEqual(len(publicador.publicados), 1)
+        self.assertEqual(registro.get(decidida.id), decidida.estado)
+
+    def test_publicar_orden_con_repo_guarda_antes_de_publicar(self):
+        orden, ctx = self._orden_y_contexto()
+        eventos = []
+        repositorio = RepositorioOrdenesFalso(eventos)
+        publicador = PublicadorEventos(eventos)
+
+        decidida = publicar_orden(orden, ctx, publicador, None, repositorio)
+
+        self.assertEqual(eventos, ["guardar", "publicar"])
+        self.assertEqual(repositorio.guardadas, [decidida])
+        self.assertNotEqual(decidida.estado, EstadoOrden.borrador)
+
+    def test_publicar_orden_con_repo_que_falla(self):
+        orden, ctx = self._orden_y_contexto()
+        error = ErrorPersistenciaOrden("guardar orden", RuntimeError("api caida"))
+        repositorio = RepositorioOrdenesFalso(error=error)
+        publicador = PublicadorEventos([])
+
+        with self.assertRaises(ErrorPersistenciaOrden):
+            publicar_orden(orden, ctx, publicador, None, repositorio)
+
+        self.assertEqual(publicador.publicados, [])
+        self.assertEqual(repositorio.eventos, ["guardar"])
 
 
 class TestFotos(unittest.TestCase):

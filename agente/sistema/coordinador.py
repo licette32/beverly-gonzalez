@@ -5,7 +5,12 @@ import queue
 import threading
 from datetime import datetime, timezone
 
-from planta_contrato import NotaRecorrida, RespuestaOperador, Topicos
+from planta_contrato import (
+    EstadoOrden,
+    NotaRecorrida,
+    RespuestaOperador,
+    Topicos,
+)
 
 from .alertas import eventos_seguridad, mensaje_seguridad
 from .ambiguedades import (
@@ -21,6 +26,7 @@ from .corte import MAX_CORRECCIONES, mensaje_corte
 from .eventos import eventos_parte
 from .interpretacion import interpretar
 from .mqtt import ClienteMQTT
+from .ordenes import RepositorioOrdenes
 from .parte import ItemParte, extraer_items
 from .repositorio import EstadoNota, RepositorioMemoria
 from .seguridad import Deteccion
@@ -35,16 +41,56 @@ class CoordinadorPartes:
         repositorio: RepositorioMemoria,
         catalogo: CatalogoPlanta,
         timeout_pregunta_s: float = PREGUNTA_TIMEOUT_S,
+        repositorio_ordenes: RepositorioOrdenes | None = None,
     ) -> None:
         self._cliente = cliente
         self._repositorio = repositorio
         self._catalogo = catalogo
         self._timeout_pregunta_s = timeout_pregunta_s
+        self._repositorio_ordenes = repositorio_ordenes
         self._cola: queue.Queue[RespuestaOperador | None] = queue.Queue()
         self._detener = threading.Event()
         self._hilo: threading.Thread | None = None
         self._timers: dict[str, threading.Timer] = {}
         self._lock = threading.RLock()
+        self._reanudar_pendientes()
+
+    def _reanudar_pendientes(self) -> None:
+        if self._repositorio_ordenes is None:
+            return
+        try:
+            pendientes = self._repositorio_ordenes.cargar_pendientes()
+        except Exception as exc:
+            log.error("no se pudieron reanudar órdenes pendientes: %s", exc)
+            return
+        n_pendientes = 0
+        n_borradores = 0
+        for orden in pendientes:
+            correlation_id = (
+                orden.evento_ids[0] if orden.evento_ids else orden.id
+            )
+            if orden.estado == EstadoOrden.pendiente:
+                n_pendientes += 1
+                log.info(
+                    "orden pendiente reanudada id=%s equipo=%s correlation_id=%s",
+                    orden.id,
+                    orden.equipo,
+                    correlation_id,
+                )
+            elif orden.estado == EstadoOrden.borrador:
+                n_borradores += 1
+                log.info(
+                    "orden borrador reanudada sin publicar id=%s equipo=%s correlation_id=%s",
+                    orden.id,
+                    orden.equipo,
+                    correlation_id,
+                )
+        log.info(
+            "reanudación de órdenes: total=%s pendientes=%s borradores=%s",
+            len(pendientes),
+            n_pendientes,
+            n_borradores,
+        )
 
     def iniciar(self) -> None:
         if self._hilo is not None:
