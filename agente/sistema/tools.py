@@ -18,6 +18,7 @@ MATERIALES_PATH = os.path.join(os.path.dirname(__file__), "..", "datos", "materi
 
 from .config import (
     CATALOGO_TIMEOUT_S,
+    HISTORIAL_TIMEOUT_S,
     HISTORIAN_TIMEOUT_S,
     MANUALES_DOCS,
     MANUALES_SECCIONES_EXCLUIDAS,
@@ -164,6 +165,29 @@ def catalogo(tag: str | None = None) -> CatalogoResponse:
         raise
     except Exception as exc:
         raise ErrorInfo(codigo="CATALOGO_ERROR", mensaje=str(exc), reintentable=True)
+
+
+def historial_ordenes(equipo: str, orden_id: str | None = None) -> HistorialOrdenesResponse:
+    """Órdenes históricas de un equipo; el filtro por id se hace localmente.
+
+    La API de la planta devuelve la lista de órdenes del archivo más las del
+    precalentamiento del escenario. El filtro por ``orden_id`` se aplica acá
+    para no depender de que el endpoint lo soporte.
+    """
+    query = urllib.parse.urlencode({"equipo": equipo})
+    url = _url(f"/api/historial-ordenes?{query}")
+    try:
+        data = _fetch(url, HISTORIAL_TIMEOUT_S)
+        ordenes = data if isinstance(data, list) else data.get("ordenes", [])
+        if not isinstance(ordenes, list):
+            ordenes = []
+        if orden_id:
+            ordenes = [o for o in ordenes if isinstance(o, dict) and o.get("id") == orden_id]
+        return HistorialOrdenesResponse.model_validate({"ordenes": ordenes})
+    except Exception as exc:
+        raise ErrorInfo(
+            codigo="HISTORIAL_ORDENES_ERROR", mensaje=str(exc), reintentable=True
+        ) from exc
 
 
 def _cargar_materiales() -> dict[str, Any]:

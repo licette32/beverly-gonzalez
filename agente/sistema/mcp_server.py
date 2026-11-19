@@ -59,6 +59,17 @@ def tareas_catalogo(equipo: str | None = None, codigo: str | None = None) -> lis
 
 
 @mcp.tool()
+def historial_ordenes(equipo: str, orden_id: str | None = None) -> list[dict]:
+    """Órdenes históricas de un equipo, opcionalmente filtradas por id."""
+    from .tools import historial_ordenes as buscar
+    try:
+        resp = buscar(equipo, orden_id)
+        return list(resp.ordenes)
+    except Exception:
+        return []
+
+
+@mcp.tool()
 def manuales_buscar(texto: str) -> list[dict]:
     """Busca en los manuales vigentes de la planta."""
     from .tools import manuales_buscar as buscar

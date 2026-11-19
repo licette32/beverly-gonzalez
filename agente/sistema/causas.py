@@ -206,6 +206,7 @@ class Causa:
     accion: str
     genera_orden: bool
     ejecutor: str
+    antecedentes: tuple[str, ...] = ()
 
 
 def lado_desde_limite(limite_violado: str | None) -> Literal["alta", "baja"] | None:
