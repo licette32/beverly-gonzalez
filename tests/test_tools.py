@@ -1,5 +1,7 @@
+import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 import json
 
@@ -28,6 +30,21 @@ from sistema.tools import (
 )
 
 
+MATERIALES_RECORTE = """
+repuestos:
+  - {codigo: TX-EMP-KIT, nombre: kit de empaquetadura TX-350 (3 émbolos), unidad: kit, costo_usd: 420, stock: {yacimiento: 3, central: 12}}
+  - {codigo: FC-CART-10, nombre: cartucho filtrante 10 µm, unidad: unidad, costo_usd: 17, stock: {yacimiento: 40, central: 600}}
+lista_materiales:
+  B-101: [TX-EMP-KIT]
+  F-201B: [FC-CART-10]
+tareas_estandar:
+  - {codigo: T-B-EMP, nombre: Cambio de empaquetadura, equipos: [B-101, B-102, B-103], detiene: true, horas: 4, ejecutor: propio, repuestos: [{codigo: TX-EMP-KIT, cantidad: 1}]}
+  - {codigo: T-F-CAR, nombre: Cambio de cartuchos, equipos: [F-201B], detiene: false, horas: 3, ejecutor: propio, repuestos: [{codigo: FC-CART-10, cantidad: 48}]}
+tareas_no_estandar:
+  - {codigo: I-VIB, nombre: Análisis de vibraciones con colector, detiene: false, horas: 1, ejecutor: contratista}
+"""
+
+
 class TestToolsModels(unittest.TestCase):
     def test_error_info_extra_forbid(self):
         with self.assertRaises(ErrorInfo) as ctx:
@@ -42,8 +59,27 @@ class TestToolsModels(unittest.TestCase):
         self.assertEqual(req.variable, "presion_descarga_local")
 
     def test_stock_item_config(self):
-        item = StockItem(tag="B-101", nombre="Bomba Uno", cantidad=100, unidad="unidades")
-        self.assertEqual(item.tag, "B-101")
+        item = StockItem(
+            codigo="TX-EMP-KIT",
+            nombre="kit de empaquetadura TX-350 (3 émbolos)",
+            unidad="kit",
+            almacen="yacimiento",
+            cantidad=3,
+            costo_unitario=420,
+        )
+        self.assertEqual(item.codigo, "TX-EMP-KIT")
+        self.assertEqual(item.almacen, "yacimiento")
+
+    def test_stock_item_rechaza_almacen_invalido(self):
+        with self.assertRaises(ValidationError):
+            StockItem(
+                codigo="TX-EMP-KIT",
+                nombre="kit de empaquetadura",
+                unidad="kit",
+                almacen="otro",
+                cantidad=3,
+                costo_unitario=420,
+            )
 
     def test_stock_response_vacio(self):
         resp = StockResponse(items=[], vacio=True)
@@ -89,40 +125,92 @@ class TestToolsFunctions(unittest.TestCase):
             result = catalogo()
         self.assertEqual(len(result.equipos), 2)
 
-    @patch("sistema.tools.os.path.exists")
-    @patch("sistema.tools.yaml")
-    def test_stock_desde_yaml(self, mock_yaml, mock_exists):
-        mock_exists.return_value = True
-        mock_yaml.safe_load.return_value = {
-            "stock": [{"tag": "B-101", "nombre": "Bomba Uno", "cantidad": 100, "unidad": "unidades"}]
-        }
-        result = stock("B-101")
+class TestMateriales(unittest.TestCase):
+    def _patch_materiales(self, contenido: str = MATERIALES_RECORTE):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "materiales.yaml"
+        path.write_text(contenido, encoding="utf-8")
+        return patch("sistema.tools.MATERIALES_PATH", str(path))
+
+    def _patch_ausente(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return patch("sistema.tools.MATERIALES_PATH", str(Path(tmp.name) / "materiales.yaml"))
+
+    def test_stock_muestra_real_recortada(self):
+        with self._patch_materiales():
+            result = stock("B-101")
         self.assertIsInstance(result, StockResponse)
         self.assertFalse(result.vacio)
-        self.assertEqual(len(result.items), 1)
-        self.assertEqual(result.items[0].tag, "B-101")
+        self.assertEqual(
+            [(item.codigo, item.almacen) for item in result.items],
+            [("TX-EMP-KIT", "yacimiento"), ("TX-EMP-KIT", "central")],
+        )
+        self.assertEqual(result.items[0].cantidad, 3)
+        self.assertEqual(result.items[1].cantidad, 12)
+        self.assertEqual(result.items[0].costo_unitario, 420)
+        self.assertEqual(result.items[0].unidad, "kit")
 
-    @patch("sistema.tools.os.path.exists")
-    def test_stock_vacio_sin_yaml(self, mock_exists):
-        mock_exists.return_value = False
-        result = stock()
-        self.assertIsInstance(result, StockResponse)
+    def test_stock_sin_tag_incluye_todos_los_almacenes(self):
+        with self._patch_materiales():
+            result = stock()
+        self.assertFalse(result.vacio)
+        self.assertEqual(len(result.items), 4)
+        self.assertEqual({item.almacen for item in result.items}, {"yacimiento", "central"})
+
+    def test_stock_tag_sin_repuestos_es_vacio_valido(self):
+        with self._patch_materiales():
+            result = stock("B-999")
+        self.assertEqual(result.items, [])
         self.assertTrue(result.vacio)
 
-    @patch("sistema.tools.os.path.exists")
-    @patch("sistema.tools.yaml")
-    def test_tareas_catalogo_con_yaml(self, mock_yaml, mock_exists):
-        mock_exists.return_value = True
-        mock_yaml.safe_load.return_value = {"tareas": [{"id": "T-001", "nombre": "Revisar presión"}]}
-        result = tareas_catalogo()
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["id"], "T-001")
+    def test_stock_archivo_ausente(self):
+        with self._patch_ausente():
+            with self.assertRaises(ErrorInfo) as ctx:
+                stock()
+        self.assertEqual(ctx.exception.codigo, "MATERIALES_ARCHIVO_AUSENTE")
+        self.assertFalse(ctx.exception.reintentable)
 
-    @patch("sistema.tools.os.path.exists")
-    def test_tareas_catalogo_sin_yaml(self, mock_exists):
-        mock_exists.return_value = False
-        result = tareas_catalogo()
-        self.assertEqual(result, [])
+    def test_stock_yaml_invalido(self):
+        with self._patch_materiales("repuestos: [\n"):
+            with self.assertRaises(ErrorInfo) as ctx:
+                stock()
+        self.assertEqual(ctx.exception.codigo, "MATERIALES_YAML_INVALIDO")
+
+    def test_stock_esquema_invalido(self):
+        with self._patch_materiales("repuestos: [{codigo: X}]\n"):
+            with self.assertRaises(ErrorInfo) as ctx:
+                stock()
+        self.assertEqual(ctx.exception.codigo, "MATERIALES_ESQUEMA_INVALIDO")
+
+    def test_tareas_muestra_real_recortada(self):
+        with self._patch_materiales():
+            tareas = tareas_catalogo()
+        self.assertEqual([tarea["codigo"] for tarea in tareas], ["T-B-EMP", "T-F-CAR"])
+        self.assertEqual(
+            set(tareas[0]),
+            {"codigo", "nombre", "equipos", "detiene", "horas", "ejecutor", "repuestos"},
+        )
+        self.assertNotIn("I-VIB", [tarea["codigo"] for tarea in tareas])
+
+    def test_tareas_archivo_ausente(self):
+        with self._patch_ausente():
+            with self.assertRaises(ErrorInfo) as ctx:
+                tareas_catalogo()
+        self.assertEqual(ctx.exception.codigo, "MATERIALES_ARCHIVO_AUSENTE")
+
+    def test_tareas_yaml_invalido(self):
+        with self._patch_materiales("tareas_estandar: [\n"):
+            with self.assertRaises(ErrorInfo) as ctx:
+                tareas_catalogo()
+        self.assertEqual(ctx.exception.codigo, "MATERIALES_YAML_INVALIDO")
+
+    def test_tareas_esquema_invalido(self):
+        with self._patch_materiales("tareas_estandar: [{codigo: X}]\n"):
+            with self.assertRaises(ErrorInfo) as ctx:
+                tareas_catalogo()
+        self.assertEqual(ctx.exception.codigo, "MATERIALES_ESQUEMA_INVALIDO")
 
 class _RetrieverFalso:
     def __init__(self, fragmentos):

@@ -5,15 +5,16 @@ import os
 import threading
 import urllib.parse
 import urllib.request
-from typing import Any, Optional, List
+from typing import Any, List, Literal, Optional
 
 import yaml
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from pydantic.config import ConfigDict
 
 # Exposed for testing (can be patched with unittest.mock)
 PLANTA_BASE_URL = os.getenv("PLANTA_BASE_URL", "http://sim:8100")
+MATERIALES_PATH = os.path.join(os.path.dirname(__file__), "..", "datos", "materiales.yaml")
 
 from .config import (
     CATALOGO_TIMEOUT_S,
@@ -66,10 +67,23 @@ class CatalogoResponse(BaseModel):
 
 class StockItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    tag: str
+    codigo: str
     nombre: str
-    cantidad: float
     unidad: str
+    almacen: Literal["yacimiento", "central"]
+    cantidad: float
+    costo_unitario: float
+
+
+class _TareaEstandar(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    codigo: str
+    nombre: str
+    equipos: List[str]
+    detiene: bool
+    horas: float
+    ejecutor: str
+    repuestos: List[dict[str, Any]]
 
 
 class StockQuery(BaseModel):
@@ -152,27 +166,124 @@ def catalogo(tag: str | None = None) -> CatalogoResponse:
         raise ErrorInfo(codigo="CATALOGO_ERROR", mensaje=str(exc), reintentable=True)
 
 
+def _cargar_materiales() -> dict[str, Any]:
+    try:
+        with open(MATERIALES_PATH, encoding="utf-8") as f:
+            datos = yaml.safe_load(f)
+    except FileNotFoundError as exc:
+        raise ErrorInfo(
+            codigo="MATERIALES_ARCHIVO_AUSENTE",
+            mensaje=f"no existe {MATERIALES_PATH}",
+            reintentable=False,
+        ) from exc
+    except UnicodeDecodeError as exc:
+        raise ErrorInfo(
+            codigo="MATERIALES_YAML_INVALIDO",
+            mensaje=str(exc),
+            reintentable=False,
+        ) from exc
+    except OSError as exc:
+        raise ErrorInfo(
+            codigo="MATERIALES_NO_DISPONIBLE",
+            mensaje=str(exc),
+            reintentable=False,
+        ) from exc
+    except yaml.YAMLError as exc:
+        raise ErrorInfo(
+            codigo="MATERIALES_YAML_INVALIDO",
+            mensaje=str(exc),
+            reintentable=False,
+        ) from exc
+    if not isinstance(datos, dict):
+        raise ErrorInfo(
+            codigo="MATERIALES_ESQUEMA_INVALIDO",
+            mensaje="el archivo no contiene un objeto YAML",
+            reintentable=False,
+        )
+    return datos
+
+
+def _items_de_stock(repuestos: list[dict[str, Any]]) -> list[StockItem]:
+    items: list[StockItem] = []
+    for i, repuesto in enumerate(repuestos):
+        try:
+            stock = repuesto["stock"]
+            for almacen in ("yacimiento", "central"):
+                items.append(
+                    StockItem(
+                        codigo=repuesto["codigo"],
+                        nombre=repuesto["nombre"],
+                        unidad=repuesto["unidad"],
+                        almacen=almacen,
+                        cantidad=stock[almacen],
+                        costo_unitario=repuesto["costo_usd"],
+                    )
+                )
+        except (KeyError, TypeError, ValidationError) as exc:
+            raise ErrorInfo(
+                codigo="MATERIALES_ESQUEMA_INVALIDO",
+                mensaje=f"repuestos[{i}]: {exc}",
+                reintentable=False,
+            ) from exc
+    return items
+
+
 def stock(tag: str | None = None) -> StockResponse:
-    """Stock desde YAML propio en agente/datos/stock.yaml. Si no existe, vacío documentado."""
-    yaml_path = os.path.join(os.path.dirname(__file__), "..", "datos", "stock.yaml")
-    if os.path.exists(yaml_path):
-        with open(yaml_path) as f:
-            datos = yaml.safe_load(f) or {}
-        items = datos.get("stock", [])
-        if tag:
-            items = [i for i in items if i.get("tag") == tag]
-        return StockResponse(items=[StockItem(**i) for i in items], vacio=False)
-    return StockResponse(items=[], vacio=True)
+    """Stock desde agente/datos/materiales.yaml, una fila por repuesto y almacén.
+
+    Si tag no tiene repuestos en lista_materiales, devuelve vacío válido.
+    """
+    datos = _cargar_materiales()
+    repuestos = datos.get("repuestos")
+    if not isinstance(repuestos, list):
+        raise ErrorInfo(
+            codigo="MATERIALES_ESQUEMA_INVALIDO",
+            mensaje="repuestos debe ser una lista",
+            reintentable=False,
+        )
+    items = _items_de_stock(repuestos)
+    if tag:
+        lista_materiales = datos.get("lista_materiales")
+        if not isinstance(lista_materiales, dict):
+            raise ErrorInfo(
+                codigo="MATERIALES_ESQUEMA_INVALIDO",
+                mensaje="lista_materiales debe ser un objeto",
+                reintentable=False,
+            )
+        codigos = lista_materiales.get(tag, [])
+        if not isinstance(codigos, list) or not all(isinstance(c, str) for c in codigos):
+            raise ErrorInfo(
+                codigo="MATERIALES_ESQUEMA_INVALIDO",
+                mensaje=f"lista_materiales[{tag!r}] debe ser una lista de códigos",
+                reintentable=False,
+            )
+        items = [item for item in items if item.codigo in codigos]
+    return StockResponse(items=items, vacio=not items)
 
 
 def tareas_catalogo() -> List[dict[str, Any]]:
-    """Catálogo de tareas desde YAML propio en agente/datos/tareas.yaml."""
-    yaml_path = os.path.join(os.path.dirname(__file__), "..", "datos", "tareas.yaml")
-    if os.path.exists(yaml_path):
-        with open(yaml_path) as f:
-            datos = yaml.safe_load(f) or {}
-        return datos.get("tareas", [])
-    return []
+    """Catálogo de tareas estándar desde agente/datos/materiales.yaml.
+
+    No incluye tareas_no_estandar.
+    """
+    datos = _cargar_materiales()
+    tareas = datos.get("tareas_estandar")
+    if not isinstance(tareas, list):
+        raise ErrorInfo(
+            codigo="MATERIALES_ESQUEMA_INVALIDO",
+            mensaje="tareas_estandar debe ser una lista",
+            reintentable=False,
+        )
+    for i, tarea in enumerate(tareas):
+        try:
+            _TareaEstandar.model_validate(tarea)
+        except ValidationError as exc:
+            raise ErrorInfo(
+                codigo="MATERIALES_ESQUEMA_INVALIDO",
+                mensaje=f"tareas_estandar[{i}]: {exc}",
+                reintentable=False,
+            ) from exc
+    return tareas
 
 
 def _buscar_manuales_en_hilo(texto: str) -> list[str]:

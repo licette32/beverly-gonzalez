@@ -28,8 +28,8 @@
 ### 1.4 Tools y MCP
 - **Tools de solo lectura** con contratos Pydantic estrictos (`extra="forbid"`):
   - `equipos`, `historian`, `catalogo`, `stock`, `tareas_catalogo`, `manuales_buscar`
-  - Expuestas por MCP en `mcp_server.py`: equipos, historian, catalogo_planta, stock, historial_ordenes, manuales_buscar. `manuales_buscar` consulta `rag.buscar` (k=5) con timeout de 15 s y un reintento, filtra los manuales vigentes de PIA-3 y devuelve citas con `cita, documento, seccion, texto, vigente`. El servidor se ejecuta por separado y no forma parte del flujo del agente.
-- **Servidor MCP:** `FastMCP("pia3-planta")` con herramientas: `equipos`, `historian`, `catalogo_planta`, `stock`, `historial_ordenes`, `manuales_buscar`
+  - Expuestas por MCP en `mcp_server.py`: equipos, historian, catalogo_planta, stock, tareas_catalogo, manuales_buscar. `manuales_buscar` consulta `rag.buscar` (k=5) con timeout de 15 s y un reintento, filtra los manuales vigentes de PIA-3 y devuelve citas con `cita, documento, seccion, texto, vigente`. El servidor se ejecuta por separado y no forma parte del flujo del agente.
+- **Servidor MCP:** `FastMCP("pia3-planta")` con herramientas: `equipos`, `historian`, `catalogo_planta`, `stock`, `tareas_catalogo`, `manuales_buscar`
 - **MQTT:** Cliente `ClienteMQTT` con validación Pydantic de cada publicación antes de enviarla
 
 ## 2. Hardware y Entorno de Ejecución

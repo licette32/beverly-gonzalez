@@ -23,7 +23,7 @@ Los datos provenientes de las tools (heraldian, catálogo, stock, historial de �
 
 - **Historical data**: Valores históricos de variables de planta obtenidos del endpoint `/api/historian/{tag}/{variable}`
 - **Catálogo de equipos**: Información del catálogo de planta obtenida de `/api/planta`, incluyendo tags, tipos, nombres y unidades manométricas
-- **Stock actual**: Cantidad actual de cada equipo, consultable desde el YAML `agente/datos/stock.yaml`
+- **Stock actual**: Cantidad actual de cada repuesto por almacén, consultable desde el YAML `agente/datos/materiales.yaml`
 - **Historial de órdenes**: Registro de órdenes de trabajo y su estado, obtenido desde `/api/historial-ordenes`
 
 ## Uso en prompts

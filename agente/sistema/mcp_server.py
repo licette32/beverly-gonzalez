@@ -40,28 +40,22 @@ def catalogo_planta(tag: str | None = None) -> list[dict]:
 
 @mcp.tool()
 def stock(tag: str | None = None) -> list[dict]:
-    """Stock actual de equipos."""
+    """Stock actual de repuestos por almacén."""
     from .tools import stock
-    try:
-        resp = stock(tag)
-        return [{"tag": i.tag, "nombre": i.nombre, "cantidad": i.cantidad, "unidad": i.unidad} for i in resp.items]
-    except Exception:
-        return []
+    resp = stock(tag)
+    return [item.model_dump() for item in resp.items]
 
 
 @mcp.tool()
-def historial_ordenes(tag: str | None = None, orden_id: str | None = None) -> list[dict]:
-    """Historial de órdenes de trabajo."""
-    from .tools import tareas_catalogo
-    try:
-        tareas = tareas_catalogo()
-        if tag:
-            tareas = [t for t in tareas if t.get("tag") == tag]
-        if orden_id:
-            tareas = [t for t in tareas if t.get("id") == orden_id]
-        return tareas
-    except Exception:
-        return []
+def tareas_catalogo(equipo: str | None = None, codigo: str | None = None) -> list[dict]:
+    """Catálogo de tareas estándar de mantenimiento."""
+    from .tools import tareas_catalogo as catalogo
+    tareas = catalogo()
+    if equipo:
+        tareas = [t for t in tareas if equipo in t.get("equipos", [])]
+    if codigo:
+        tareas = [t for t in tareas if t.get("codigo") == codigo]
+    return tareas
 
 
 @mcp.tool()

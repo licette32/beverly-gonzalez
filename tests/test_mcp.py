@@ -2,6 +2,8 @@ import asyncio
 import unittest
 from unittest.mock import MagicMock, patch
 
+from mcp.server.fastmcp.exceptions import ToolError
+
 from agente.sistema.mcp_server import mcp
 
 
@@ -13,7 +15,7 @@ class TestMCPServer(unittest.TestCase):
         self.assertIn("historian", tool_names)
         self.assertIn("catalogo_planta", tool_names)
         self.assertIn("stock", tool_names)
-        self.assertIn("historial_ordenes", tool_names)
+        self.assertIn("tareas_catalogo", tool_names)
         self.assertIn("manuales_buscar", tool_names)
 
     def test_call_tool_equipos(self):
@@ -34,12 +36,29 @@ class TestMCPServer(unittest.TestCase):
         metadata = result[1] if isinstance(result, tuple) else {}
         result_list = metadata.get("result", []) if isinstance(metadata, dict) else []
         self.assertIsInstance(result_list, list)
+        self.assertTrue(result_list)
+        self.assertEqual(
+            set(result_list[0]),
+            {"codigo", "nombre", "unidad", "almacen", "cantidad", "costo_unitario"},
+        )
 
-    def test_call_tool_historial_ordenes(self):
-        result = asyncio.run(mcp.call_tool("historial_ordenes", {}))
+    @patch("agente.sistema.tools.MATERIALES_PATH", "no-existe-materiales.yaml")
+    def test_call_tool_stock_propaga_error(self):
+        with self.assertRaises(ToolError):
+            asyncio.run(mcp.call_tool("stock", {}))
+
+    def test_call_tool_tareas_catalogo(self):
+        result = asyncio.run(mcp.call_tool("tareas_catalogo", {}))
         metadata = result[1] if isinstance(result, tuple) else {}
         result_list = metadata.get("result", []) if isinstance(metadata, dict) else []
         self.assertIsInstance(result_list, list)
+        self.assertTrue(result_list)
+        self.assertTrue(all("codigo" in tarea for tarea in result_list))
+
+    @patch("agente.sistema.tools.MATERIALES_PATH", "no-existe-materiales.yaml")
+    def test_call_tool_tareas_catalogo_propaga_error(self):
+        with self.assertRaises(ToolError):
+            asyncio.run(mcp.call_tool("tareas_catalogo", {}))
 
     def test_call_tool_manuales_buscar_vacio(self):
         result = asyncio.run(mcp.call_tool("manuales_buscar", {"texto": ""}))

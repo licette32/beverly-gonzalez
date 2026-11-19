@@ -129,7 +129,7 @@ La planta (`broker`, `enlace`, `sim`, `visor`) viene del compose del curso `acad
 ├── README.md · INFORME.md · docker-compose.yml
 ├── agente/
 │   ├── Dockerfile · requirements.txt
-│   ├── datos/                 stock.yaml, tareas.yaml (catálogo y stock)
+│   ├── datos/                 materiales.yaml (stock, costos y tareas estándar)
 │   └── sistema/               código del agente (main, worker, coordinador,
 │                              seguridad, parte, tools, mcp_server, rag, ...)
 ├── docs/                      DECISIONES, SPEC_PARTE, MEMORIA, LIMITES, CONTEXT_BUILDER
@@ -151,7 +151,7 @@ La planta (`broker`, `enlace`, `sim`, `visor`) viene del compose del curso `acad
 | Confirmación | El borrador va a la tablet; el operador corrige hablando y el sistema reenvía el borrador |
 | Detección | Cada parte confirmado genera un evento `Sin novedad` o `Escalado`, con las reglas de la hoja de datos (no las de la Rev. C vencida) |
 | Condición insegura | Detector S1-S4 local; publica `AlertaSeguridad` y el aviso a la tablet |
-| Tools de solo lectura | Equipos, historial de sensores, historial de órdenes, stock, catálogo de tareas y búsqueda en manuales, con Pydantic estricto (`extra="forbid"`), timeouts y reintentos |
+| Tools de solo lectura | Equipos, historial de sensores, stock, catálogo de tareas y búsqueda en manuales, con Pydantic estricto (`extra="forbid"`), timeouts y reintentos |
 | MCP | Las tools se exponen en `mcp_server.py` (servidor aparte, no forma parte del compose) |
 | Control | Condiciones de corte, presupuesto de pasos y timeout global por nota |
 | Memoria | Estado de la conversación de cada nota en Postgres; política en [`docs/MEMORIA.md`](docs/MEMORIA.md) |
