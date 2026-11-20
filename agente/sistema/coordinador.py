@@ -75,10 +75,10 @@ class CoordinadorPartes:
         self._hilo: threading.Thread | None = None
         self._timers: dict[str, threading.Timer] = {}
         self._lock = threading.RLock()
-        self._reanudar_pendientes()
 
-    def _reanudar_pendientes(self) -> None:
+    def reanudar_pendientes(self) -> None:
         if self._repositorio_ordenes is None:
+            log.warning("sin repositorio de órdenes: no se reanudan pendientes")
             return
         try:
             pendientes = self._repositorio_ordenes.cargar_pendientes()
@@ -92,6 +92,21 @@ class CoordinadorPartes:
                 orden.evento_ids[0] if orden.evento_ids else orden.id
             )
             if orden.estado == EstadoOrden.pendiente:
+                try:
+                    publicada = publicar_orden(
+                        orden,
+                        None,
+                        self._cliente.publicar,
+                        self._registro_ordenes,
+                        self._repositorio_ordenes,
+                    )
+                except Exception:
+                    log.exception(
+                        "no se pudo republicar la orden pendiente %s", orden.id
+                    )
+                    continue
+                if publicada is None:
+                    continue
                 n_pendientes += 1
                 log.info(
                     "orden pendiente reanudada id=%s equipo=%s correlation_id=%s",

@@ -263,15 +263,16 @@ class TestCoordinadorReanudacion(unittest.TestCase):
         )
 
     def test_coordinador_sin_repo_no_toca_postgres(self):
-        with patch("sistema.coordinador.log.info") as info:
-            coordinador = self._coordinador()
-            coordinador.iniciar()
+        coordinador = self._coordinador()
         try:
+            with self.assertLogs("sistema.coordinador", level="WARNING") as logs:
+                coordinador.reanudar_pendientes()
             self.assertIsNone(coordinador._repositorio_ordenes)
             self.assertEqual(self.cliente.publicados, [])
-            self.assertFalse(
-                any("reanudación" in str(llamada) for llamada in info.call_args_list)
+            self.assertTrue(
+                any("no se reanudan pendientes" in mensaje for mensaje in logs.output)
             )
+            coordinador.iniciar()
         finally:
             coordinador.detener()
 
@@ -279,19 +280,23 @@ class TestCoordinadorReanudacion(unittest.TestCase):
         borrador = orden_para_reanudar("ORD-BORRADOR", EstadoOrden.borrador)
         pendiente = orden_para_reanudar("ORD-PENDIENTE", EstadoOrden.pendiente)
         repositorio = RepositorioOrdenesFalso([borrador, pendiente])
-
-        with self.assertLogs("sistema.coordinador", level="INFO") as logs:
-            coordinador = self._coordinador(
-                repositorio_ordenes=repositorio, cliente=self.cliente
-            )
+        coordinador = self._coordinador(
+            repositorio_ordenes=repositorio, cliente=self.cliente
+        )
         try:
+            with self.assertLogs("sistema.coordinador", level="INFO") as logs:
+                coordinador.reanudar_pendientes()
             texto = "\n".join(logs.output)
             self.assertIn("orden borrador reanudada sin publicar", texto)
             self.assertIn(borrador.id, texto)
             self.assertIn("orden pendiente reanudada", texto)
             self.assertIn(pendiente.id, texto)
             self.assertIn("total=2 pendientes=1 borradores=1", texto)
-            self.assertEqual(self.cliente.publicados, [])
+            self.assertEqual(len(self.cliente.publicados), 1)
+            topico, orden_publicada = self.cliente.publicados[0]
+            self.assertEqual(topico, Topicos.ORDENES)
+            self.assertEqual(orden_publicada.id, pendiente.id)
+            self.assertIs(orden_publicada.estado, EstadoOrden.pendiente)
             self.assertEqual(repositorio.llamadas, 1)
             self.assertEqual(
                 [orden.estado for orden in repositorio.pendientes],
@@ -302,12 +307,12 @@ class TestCoordinadorReanudacion(unittest.TestCase):
 
     def test_coordinador_con_repo_que_falla_arranca(self):
         repositorio = RepositorioOrdenesFalso(error=RuntimeError("api caida"))
-
-        with self.assertLogs("sistema.coordinador", level="ERROR") as logs:
-            coordinador = self._coordinador(
-                repositorio_ordenes=repositorio, cliente=self.cliente
-            )
+        coordinador = self._coordinador(
+            repositorio_ordenes=repositorio, cliente=self.cliente
+        )
         try:
+            with self.assertLogs("sistema.coordinador", level="ERROR") as logs:
+                coordinador.reanudar_pendientes()
             self.assertIn(
                 "no se pudieron reanudar órdenes pendientes: api caida",
                 "\n".join(logs.output),

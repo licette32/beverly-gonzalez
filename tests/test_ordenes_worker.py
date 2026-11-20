@@ -1,5 +1,6 @@
 import time
 import unittest
+import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -14,11 +15,16 @@ from planta_contrato import (
 
 from sistema.anomalias_recientes import AlmacenAnomalias
 from sistema.causas import Anomalia, EvidenciaEquipo
+from sistema.config import POSTGRES_DSN
 from sistema.coordinador import CoordinadorPartes
 from sistema.ordenes import ErrorEstadoEsperado
 from sistema.ordenes_worker import WorkerOrdenes
 from sistema.parte import ItemParte
-from sistema.repositorio_ordenes import ESTADOS_ABIERTOS, ErrorPersistenciaOrden
+from sistema.repositorio_ordenes import (
+    ESTADOS_ABIERTOS,
+    ErrorPersistenciaOrden,
+    RepositorioOrdenesPostgres,
+)
 from sistema.tools import stock, tareas_catalogo
 
 from test_catalogo import DATOS
@@ -27,6 +33,23 @@ from test_coordinador import ClienteFalso, RepositorioMemoria
 
 TS = datetime(2026, 11, 20, 14, 0, tzinfo=timezone.utc)
 BOMBAS_CON_RESERVA = {"B-101": "marcha", "B-102": "parada", "B-103": "marcha"}
+SUFIJO = uuid.uuid4().hex[:10]
+
+
+def _id(nombre: str) -> str:
+    return f"test-worker-ordenes-{SUFIJO}-{nombre}"
+
+
+def _contar(repositorio, orden_id: str) -> int:
+    conexion = repositorio._abrir_conexion()
+    try:
+        with conexion.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM ordenes WHERE id = %s", (orden_id,))
+            fila = cursor.fetchone()
+        conexion.commit()
+        return int(fila[0])
+    finally:
+        conexion.close()
 
 
 class RepositorioOrdenesFalso:
@@ -288,6 +311,38 @@ class TestWorkerOrdenes(unittest.TestCase):
         self.assertEqual(repositorio.intentos, 1)
         tiempo.sleep.assert_not_called()
         self.assertEqual(self.publicador.ordenes(), [])
+
+
+@unittest.skipUnless(POSTGRES_DSN, "POSTGRES_DSN no configurado")
+class TestReinicioOrdenesPostgres(unittest.TestCase):
+    def test_orden_sobrevive_reinicio_sin_duplicar(self):
+        repositorio = RepositorioOrdenesPostgres(POSTGRES_DSN)
+        orden = orden_abierta(_id("reinicio"), estado=EstadoOrden.pendiente)
+        try:
+            repositorio.guardar(orden)
+
+            nuevo_worker = WorkerOrdenes(
+                PublicadorFalso(),
+                repositorio,
+                catalogo=CatalogoFalso(),
+                estado_bombas=lambda: BOMBAS_CON_RESERVA,
+                historial=lambda equipo: [],
+            )
+
+            pendientes = repositorio.cargar_pendientes()
+            recuperada = next((item for item in pendientes if item.id == orden.id), None)
+            self.assertIs(nuevo_worker._repositorio, repositorio)
+            self.assertIsNotNone(recuperada)
+            self.assertEqual(recuperada.id, orden.id)
+            self.assertIs(recuperada.estado, EstadoOrden.pendiente)
+            self.assertEqual(_contar(repositorio, orden.id), 1)
+        finally:
+            repositorio._ejecutar(
+                "limpiar prueba de reinicio",
+                "DELETE FROM ordenes WHERE id = %s",
+                (orden.id,),
+            )
+            repositorio.cerrar()
 
 
 class TestCoordinadorConWorker(unittest.TestCase):

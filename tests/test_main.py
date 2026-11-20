@@ -68,6 +68,7 @@ class TestMainRepositorioOrdenes(unittest.TestCase):
         self.assertIsNotNone(coordinador.call_args.kwargs["encolar_orden"])
         self.assertIsNotNone(worker_sensores.call_args.kwargs["encolar_orden"])
         worker.return_value.start.assert_called_once_with()
+        coordinador.return_value.reanudar_pendientes.assert_called_once_with()
 
     def test_main_arranca_sin_dsn_y_desactiva_ordenes(self):
         with self.assertLogs("sistema.main", level="WARNING") as registros:
@@ -81,6 +82,10 @@ class TestMainRepositorioOrdenes(unittest.TestCase):
         self.assertTrue(
             any("sin repositorio de órdenes" in mensaje for mensaje in registros.output)
         )
+        self.assertTrue(
+            any("no se reanudan pendientes" in mensaje for mensaje in registros.output)
+        )
+        coordinador.return_value.reanudar_pendientes.assert_not_called()
 
 
 if __name__ == "__main__":

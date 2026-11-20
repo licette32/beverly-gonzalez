@@ -87,7 +87,12 @@ def main() -> None:
         else None
     )
     worker_cierres = (
-        WorkerCierres(repositorio_cierres, repositorio_ordenes, transcriptor)
+        WorkerCierres(
+            repositorio_cierres,
+            repositorio_ordenes,
+            transcriptor,
+            publicador=cliente.publicar,
+        )
         if repositorio_cierres is not None and repositorio_ordenes is not None
         else None
     )
@@ -134,8 +139,6 @@ def main() -> None:
     # transcripción espera a que el modelo esté listo. Así no se pierde una nota
     # si la carga tarda. Postgres se conecta después, en segundo plano.
     cliente.conectar()
-    if worker_ordenes is not None:
-        worker_ordenes.start()
     if worker_cierres is not None:
         try:
             worker_cierres.start()
@@ -143,6 +146,7 @@ def main() -> None:
             logging.getLogger(__name__).warning(
                 "No se pudo iniciar el worker de cierres: %s", exc
             )
+            cliente.al_recibir_cierre = None
             worker_cierres.detener()
             worker_cierres = None
             cierres_worker_no_arranco = True
@@ -157,6 +161,14 @@ def main() -> None:
         logging.getLogger(__name__).warning(
             "los cierres no se procesan porque el worker no arrancó"
         )
+    if worker_ordenes is not None:
+        worker_ordenes.start()
+    if repositorio_ordenes is None:
+        logging.getLogger(__name__).warning(
+            "sin repositorio de órdenes tras los reintentos: no se reanudan pendientes"
+        )
+    else:
+        coordinador.reanudar_pendientes()
     worker.start()
     worker_sensores.start()
     coordinador.iniciar()

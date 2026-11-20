@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from planta_contrato import EstadoOrden, NotaCierre, OrdenSistema, Repuesto
+from planta_contrato import EstadoOrden, NotaCierre, OrdenSistema, Repuesto, Topicos
 
 from sistema import cli, main, transcripcion
 from sistema.cierres import ManejadorCierres, WorkerCierres
@@ -433,6 +433,57 @@ class TestWorkerCierres(unittest.TestCase):
         self.assertEqual(len(repositorio_cierres.filas), 1)
         self.assertEqual(repositorio_cierres.obtener(nota_.id).estado, "recibido")
 
+    def test_reencolar_recibidos_reaplica_cierre_y_encola(self):
+        repositorio_ordenes = RepositorioOrdenesFalso(
+            orden(estado=EstadoOrden.aprobada)
+        )
+        repositorio_cierres = RepositorioCierresMemoria()
+        nota_ = nota()
+        repositorio_cierres.guardar_recibido(nota_)
+        publicador = PublicadorFalso()
+        worker = WorkerCierres(
+            repositorio_cierres,
+            repositorio_ordenes,
+            TranscriptorCierreFalso(),
+            publicador=publicador,
+            descargar=descargar_falso,
+        )
+        self.addCleanup(worker.detener)
+
+        self.assertEqual(worker.reencolar_recibidos(), 1)
+
+        self.assertIs(
+            repositorio_ordenes.obtener("O-REAL").estado, EstadoOrden.ejecutada
+        )
+        self.assertEqual(len(publicador.publicados), 1)
+        topico, orden_publicada = publicador.publicados[0]
+        self.assertEqual(topico, Topicos.ORDENES)
+        self.assertEqual(orden_publicada.id, "O-REAL")
+        self.assertIs(orden_publicada.estado, EstadoOrden.ejecutada)
+        self.assertEqual(worker._cola.qsize(), 1)
+
+    def test_reencolar_recibidos_con_orden_ejecutada_republica_y_encola(self):
+        ejecutada = orden(estado=EstadoOrden.ejecutada)
+        repositorio_ordenes = RepositorioOrdenesFalso(ejecutada)
+        repositorio_cierres = RepositorioCierresMemoria()
+        nota_ = nota()
+        repositorio_cierres.guardar_recibido(nota_)
+        publicador = PublicadorFalso()
+        worker = WorkerCierres(
+            repositorio_cierres,
+            repositorio_ordenes,
+            TranscriptorCierreFalso(),
+            publicador=publicador,
+            descargar=descargar_falso,
+        )
+        self.addCleanup(worker.detener)
+
+        self.assertEqual(worker.reencolar_recibidos(), 1)
+
+        self.assertEqual(publicador.publicados, [(Topicos.ORDENES, ejecutada)])
+        self.assertEqual(repositorio_ordenes.guardadas, [])
+        self.assertEqual(worker._cola.qsize(), 1)
+
     def test_transcripcion_fallida_tras_reintentos_deja_orden_ejecutada(self):
         repositorio_cierres = RepositorioCierresMemoria()
         repositorio_ordenes = RepositorioOrdenesFalso(orden(estado=EstadoOrden.ejecutada))
@@ -508,6 +559,7 @@ class TestWorkerCierres(unittest.TestCase):
             repositorio_cierres,
             repositorio_ordenes,
             TranscriptorCierreFalso(texto=CIERRES_REALES[0][1]),
+            publicador=PublicadorFalso(),
             descargar=descargar_falso,
         )
         self.addCleanup(worker.detener)

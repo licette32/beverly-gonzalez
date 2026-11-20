@@ -36,6 +36,45 @@ PROMPT_CIERRE = (
 REINTENTOS_TRANSCRIPCION = 3
 
 
+def aplicar_cierre(
+    nota: NotaCierre,
+    repositorio: RepositorioOrdenes,
+    publicador: Callable[[str, BaseModel], None],
+    *,
+    republicar_si_ejecutada: bool = False,
+) -> OrdenSistema | None:
+    orden = repositorio.obtener(nota.orden_id)
+    if orden is None:
+        log.error(
+            "anomalía en cierre %s: orden %s no encontrada",
+            nota.id,
+            nota.orden_id,
+        )
+        return None
+
+    if orden.estado is EstadoOrden.ejecutada:
+        log.info("cierre idempotente %s: orden %s ya ejecutada", nota.id, orden.id)
+        if republicar_si_ejecutada:
+            publicador(Topicos.ORDENES, orden)
+        return None
+
+    try:
+        ejecutada = transicionar(orden, Accion.registrar_cierre, nota=nota)
+    except ErrorTransicion as exc:
+        log.error("anomalía en cierre %s: %s", nota.id, exc)
+        return None
+
+    repositorio.guardar(ejecutada)
+    publicador(Topicos.ORDENES, ejecutada)
+    log.info(
+        "cierre %s aplicado: orden %s pasó a %s",
+        nota.id,
+        orden.id,
+        ejecutada.estado.value,
+    )
+    return ejecutada
+
+
 class ManejadorCierres:
     def __init__(
         self,
@@ -56,38 +95,8 @@ class ManejadorCierres:
             except Exception:
                 log.exception("no se pudo guardar el cierre %s al recibirlo", nota.id)
 
-        orden = self._repositorio.obtener(nota.orden_id)
-        if orden is None:
-            log.error(
-                "anomalía en cierre %s: orden %s no encontrada",
-                nota.id,
-                nota.orden_id,
-            )
-            return None
-
-        if orden.estado is EstadoOrden.ejecutada:
-            log.info(
-                "cierre idempotente %s: orden %s ya ejecutada", nota.id, orden.id
-            )
-            return None
-
-        try:
-            ejecutada = transicionar(
-                orden, Accion.registrar_cierre, nota=nota
-            )
-        except ErrorTransicion as exc:
-            log.error("anomalía en cierre %s: %s", nota.id, exc)
-            return None
-
-        self._repositorio.guardar(ejecutada)
-        self._publicador(Topicos.ORDENES, ejecutada)
-        log.info(
-            "cierre %s aplicado: orden %s pasó a %s",
-            nota.id,
-            orden.id,
-            ejecutada.estado.value,
-        )
-        if self._encolar is not None:
+        ejecutada = aplicar_cierre(nota, self._repositorio, self._publicador)
+        if ejecutada is not None and self._encolar is not None:
             self._encolar(nota)
         return ejecutada
 
@@ -99,6 +108,7 @@ class WorkerCierres(threading.Thread):
         repositorio_ordenes: Any,
         transcriptor: Any,
         *,
+        publicador: Callable[[str, BaseModel], None] | None = None,
         limite_transcripcion_s: float = TRANSCRIPCION_LIMITE_S,
         reintentos_transcripcion: int = REINTENTOS_TRANSCRIPCION,
         descargar: Callable[[str, str], Path] | None = None,
@@ -107,6 +117,7 @@ class WorkerCierres(threading.Thread):
         self._cierres = repositorio_cierres
         self._ordenes = repositorio_ordenes
         self._transcriptor = transcriptor
+        self._publicador = publicador
         self._limite_transcripcion_s = limite_transcripcion_s
         self._reintentos = reintentos_transcripcion
         self._descargar = descargar if descargar is not None else audio.descargar_audio
@@ -129,6 +140,24 @@ class WorkerCierres(threading.Thread):
             log.exception("no se pudieron cargar los cierres recibidos")
             return 0
         for fila in filas:
+            if self._publicador is None:
+                log.warning(
+                    "sin publicador: no se puede reanudar la transición del cierre %s",
+                    fila.nota.id,
+                )
+                continue
+            try:
+                aplicar_cierre(
+                    fila.nota,
+                    self._ordenes,
+                    self._publicador,
+                    republicar_si_ejecutada=True,
+                )
+            except Exception:
+                log.exception(
+                    "no se pudo reaplicar el cierre %s al reanudar", fila.nota.id
+                )
+                continue
             self.encolar(fila.nota)
         return len(filas)
 
