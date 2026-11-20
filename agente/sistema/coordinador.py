@@ -33,6 +33,7 @@ from .catalogo import CatalogoPlanta, historian_rango
 from .config import PREGUNTA_TIMEOUT_S, SENSORES_ANOMALIA_VENTANA_MIN
 from .corte import MAX_CORRECCIONES, mensaje_corte
 from .eventos import eventos_parte
+from .heartbeat import ColaPendientes
 from .interpretacion import interpretar
 from .mqtt import ClienteMQTT
 from .ordenes import (
@@ -59,6 +60,7 @@ class CoordinadorPartes:
         almacen_anomalias: AlmacenAnomalias | None = None,
         encolar_orden: Callable[[EventoSistema, EvidenciaEquipo, bool], None]
         | None = None,
+        pendientes: ColaPendientes | None = None,
     ) -> None:
         self._cliente = cliente
         self._repositorio = repositorio
@@ -70,6 +72,7 @@ class CoordinadorPartes:
             almacen_anomalias if almacen_anomalias is not None else AlmacenAnomalias()
         )
         self._encolar_orden = encolar_orden
+        self._pendientes = pendientes
         self._cola: queue.Queue[RespuestaOperador | None] = queue.Queue()
         self._detener = threading.Event()
         self._hilo: threading.Thread | None = None
@@ -138,6 +141,8 @@ class CoordinadorPartes:
             self._cliente.publicar(Topicos.EVENTOS, evento)
             if evento.tipo is TipoEvento.escalado:
                 self._encolar_evento_parte(evento, items, nota)
+                if self._pendientes is not None:
+                    self._pendientes.agregar(f"evento:{evento.id}")
 
     def _encolar_evento_parte(
         self, evento: EventoSistema, items: list[ItemParte], nota: NotaRecorrida
@@ -183,6 +188,8 @@ class CoordinadorPartes:
     def procesar_nota(
         self, nota: NotaRecorrida, texto: str, detecciones: list[Deteccion]
     ) -> None:
+        if self._pendientes is not None and nota.fotos:
+            self._pendientes.agregar(f"fotos:{nota.id}")
         if detecciones:
             self._procesar_seguridad(nota, texto, detecciones)
             return
@@ -194,6 +201,8 @@ class CoordinadorPartes:
         eventos = eventos_seguridad(nota, detecciones)
         for evento in eventos:
             self._cliente.publicar(Topicos.EVENTOS, evento)
+            if self._pendientes is not None:
+                self._pendientes.agregar(f"evento:{evento.id}")
         self._cliente.publicar(Topicos.TABLET, mensaje_seguridad(nota, detecciones))
 
         items = items_seguridad(detecciones)
@@ -276,6 +285,8 @@ class CoordinadorPartes:
             self._repositorio_ordenes,
         )
         if publicada is not None:
+            if self._pendientes is not None:
+                self._pendientes.agregar(f"orden:{publicada.id}")
             log.info(
                 "nota %s seguridad: orden %s pendiente por daño estructural publicada",
                 nota.id,

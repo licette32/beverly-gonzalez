@@ -11,6 +11,9 @@ from .anomalias_recientes import AlmacenAnomalias
 from .catalogo import CatalogoPlanta
 from .cierres import ManejadorCierres, WorkerCierres
 from .config import (
+    ENLACE_SONDA_INTERVALO_S,
+    ENLACE_SONDA_TIMEOUT_S,
+    ENLACE_SONDA_URL,
     HEARTBEAT_S,
     INDEXAR_PG_AL_ARRANCAR,
     LOG_LEVEL,
@@ -27,7 +30,7 @@ from .config import (
 )
 from .coordinador import CoordinadorPartes
 from .eventos_sensores import WorkerSensores
-from .heartbeat import Latido
+from .heartbeat import ColaPendientes, Latido, SondaEnlace
 from .mqtt import ClienteMQTT
 from .ordenes_worker import WorkerOrdenes
 from .repositorio import crear_repositorio
@@ -81,6 +84,17 @@ def main() -> None:
         RepositorioCierresPostgres(POSTGRES_DSN) if POSTGRES_DSN else None
     )
     almacen_anomalias = AlmacenAnomalias()
+    cola_pendientes = ColaPendientes()
+    sonda_enlace = SondaEnlace(
+        url=ENLACE_SONDA_URL,
+        timeout_s=ENLACE_SONDA_TIMEOUT_S,
+        intervalo_s=ENLACE_SONDA_INTERVALO_S,
+        al_cambio=cola_pendientes.actualizar_enlace,
+    )
+
+    def pendientes_totales() -> int:
+        return repositorio.pendientes_sincronizar() + cola_pendientes.cantidad()
+
     worker_ordenes = (
         WorkerOrdenes(cliente.publicar, repositorio_ordenes)
         if repositorio_ordenes is not None
@@ -114,6 +128,7 @@ def main() -> None:
         repositorio_ordenes=repositorio_ordenes,
         almacen_anomalias=almacen_anomalias,
         encolar_orden=encolar_orden,
+        pendientes=cola_pendientes,
     )
     worker = WorkerNotas(cliente, transcriptor, coordinador)
     ventana_sensores = VentanaSensores(
@@ -130,6 +145,7 @@ def main() -> None:
         ),
         almacen_anomalias=almacen_anomalias,
         encolar_orden=encolar_orden,
+        pendientes=cola_pendientes,
     )
     cliente.al_recibir_nota = worker.encolar
     cliente.al_recibir_respuesta = coordinador.encolar_respuesta
@@ -174,11 +190,13 @@ def main() -> None:
     coordinador.iniciar()
     cliente.suscribir(TOPICOS)
 
+    sonda_enlace.start()
     latido = Latido(
         cliente,
         SISTEMA,
         HEARTBEAT_S,
-        pendientes=repositorio.pendientes_sincronizar,
+        pendientes=pendientes_totales,
+        enlace_ok=lambda: sonda_enlace.arriba,
     )
     latido.start()
 
@@ -192,6 +210,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        sonda_enlace.detener()
+        sonda_enlace.join(timeout=2)
         latido.detener()
         latido.join(timeout=2)
         worker_sensores.detener()

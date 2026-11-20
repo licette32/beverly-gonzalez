@@ -23,6 +23,7 @@ from .anomalias_recientes import (
 )
 from .catalogo import EstadoPlanta
 from .causas import EvidenciaEquipo
+from .heartbeat import ColaPendientes
 from .sensores import VentanaSensores
 
 log = logging.getLogger(__name__)
@@ -190,6 +191,7 @@ class WorkerSensores(threading.Thread):
         almacen_anomalias: AlmacenAnomalias | None = None,
         encolar_orden: Callable[[EventoSistema, EvidenciaEquipo, bool], None]
         | None = None,
+        pendientes: ColaPendientes | None = None,
     ) -> None:
         super().__init__(name="sensores", daemon=True)
         self._cliente = cliente
@@ -200,6 +202,7 @@ class WorkerSensores(threading.Thread):
             almacen_anomalias if almacen_anomalias is not None else AlmacenAnomalias()
         )
         self._encolar_orden = encolar_orden
+        self._cola_pendientes = pendientes
         self._por_publicar: dict[tuple[str, str], EvidenciaEquipo] = {}
         self._detector = DetectorSensores(
             ventana, limites, parametros, al_anomalia=self._registrar_anomalia
@@ -280,6 +283,8 @@ class WorkerSensores(threading.Thread):
             self._por_publicar.pop(clave, None)
             self._detector.olvidar(tag, variable)
             raise
+        if self._cola_pendientes is not None and evento.tipo is TipoEvento.escalado:
+            self._cola_pendientes.agregar(f"evento:{evento.id}")
         evidencia = self._por_publicar.pop(clave, None)
         if evidencia is not None and self._encolar_orden is not None:
             self._encolar_orden(evento, evidencia, False)

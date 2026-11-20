@@ -7,6 +7,7 @@ from planta_contrato import Calidad, EventoSistema, LecturaSensor, TipoEvento, T
 from sistema.anomalias import ParametrosDeteccion
 from sistema.catalogo import EstadoPlanta
 from sistema.eventos_sensores import DetectorSensores, WorkerSensores
+from sistema.heartbeat import ColaPendientes
 from sistema.sensores import VentanaSensores
 
 BASE = datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc)
@@ -217,6 +218,29 @@ class TestEstadoPlanta(unittest.TestCase):
         self.assertEqual(topico, Topicos.EVENTOS)
         EventoSistema.model_validate(evento.model_dump(mode="json"))
         self.assertEqual(evento.origen, "sensor")
+
+    def test_worker_cuenta_escalado_durante_el_corte(self):
+        lecturas = [lectura(minutos) for minutos in range(0, 28, 3)]
+        lecturas += [lectura(minutos, 130.0) for minutos in range(30, 48, 3)]
+        cliente = ClienteFalso()
+        estado = EstadoPlantaFalso(
+            [{"bombas": [{"tag": "B-101", "estado": "marcha"}]}]
+        )
+        cola = ColaPendientes()
+        worker = WorkerSensores(
+            cliente,
+            ventana_de(lecturas),
+            LIMITES,
+            PARAMETROS,
+            estado=estado,
+            pendientes=cola,
+        )
+
+        cola.actualizar_enlace(False)
+        worker._procesar(CLAVE)
+
+        self.assertEqual(len(cliente.publicados), 1)
+        self.assertEqual(cola.cantidad(), 1)
 
 
 if __name__ == "__main__":

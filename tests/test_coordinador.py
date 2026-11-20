@@ -14,6 +14,7 @@ from planta_contrato import (
 
 from sistema.catalogo import CatalogoPlanta
 from sistema.coordinador import CoordinadorPartes
+from sistema.heartbeat import ColaPendientes
 from sistema.repositorio import RepositorioMemoria
 from sistema.repositorio_ordenes import ErrorPersistenciaOrden
 from sistema.seguridad import Deteccion
@@ -210,6 +211,38 @@ class TestCoordinador(unittest.TestCase):
         self.assertFalse(orden.detiene_equipo)
         self.assertFalse(orden.reduce_inyeccion)
         self.assertEqual(orden.repuestos, [])
+
+    def test_pendientes_durante_corte_se_limpian_sin_republicar(self):
+        cola = ColaPendientes()
+        cliente = ClienteFalso()
+        coordinador = CoordinadorPartes(
+            cliente,
+            RepositorioMemoria(),
+            self.catalogo,
+            timeout_pregunta_s=0.05,
+            pendientes=cola,
+        )
+        coordinador.iniciar()
+        try:
+            cola.actualizar_enlace(False)
+            texto = (
+                "¡Atención! Se rompió algo en la descarga de la uno, sale agua a "
+                "presión para todos lados, me alejé. Saqué foto desde lejos."
+            )
+            nota_seguridad = nota("NOTA-00003").model_copy(
+                update={"fotos": ["/media/fotos/rotura_descarga/04.jpg"]}
+            )
+            coordinador.procesar_nota(
+                nota_seguridad, texto, [Deteccion("S1", "agua a presion")]
+            )
+            self.assertGreater(cola.cantidad(), 0)
+            publicados = len(cliente.publicados)
+
+            self.assertTrue(cola.actualizar_enlace(True))
+            self.assertEqual(cola.cantidad(), 0)
+            self.assertEqual(len(cliente.publicados), publicados)
+        finally:
+            coordinador.detener()
 
     def test_alerta_seguridad_sale_aunque_falle_la_persistencia(self):
         texto = (
