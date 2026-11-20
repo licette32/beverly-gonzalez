@@ -15,6 +15,8 @@ from planta_contrato import (
 from sistema.catalogo import CatalogoPlanta
 from sistema.coordinador import CoordinadorPartes
 from sistema.repositorio import RepositorioMemoria
+from sistema.repositorio_ordenes import ErrorPersistenciaOrden
+from sistema.seguridad import Deteccion
 
 from test_catalogo import DATOS
 
@@ -116,6 +118,13 @@ class TestCoordinador(unittest.TestCase):
             if topico == Topicos.EVENTOS
         ]
 
+    def ordenes(self):
+        return [
+            modelo
+            for topico, modelo in self.cliente.publicados
+            if topico == Topicos.ORDENES
+        ]
+
     def esperar_estado(self, nota_id, esperado, limite=1.0):
         fin = time.time() + limite
         while time.time() < fin:
@@ -163,6 +172,81 @@ class TestCoordinador(unittest.TestCase):
         self.assertIsNone(estado.pregunta)
         self.assertIn("sin respuesta del operador", estado.borrador[0].observacion)
         self.assertTrue(any(evento.equipo is None for evento in self.eventos()))
+
+    def test_nota_seguridad_b101_publica_orden_pendiente_sin_tareas(self):
+        texto = (
+            "¡Atención! Se rompió algo en la descarga de la uno, sale agua a "
+            "presión para todos lados, me alejé. Saqué foto desde lejos."
+        )
+        nota_seguridad = nota("NOTA-00001").model_copy(
+            update={"fotos": ["/media/fotos/rotura_descarga/04.jpg"]}
+        )
+        detecciones = [Deteccion("S1", "agua a presion")]
+
+        self.coordinador.procesar_nota(nota_seguridad, texto, detecciones)
+
+        alertas = [
+            evento
+            for evento in self.eventos()
+            if evento.tipo.value == "AlertaSeguridad"
+        ]
+        self.assertEqual(len(alertas), 1)
+        self.assertIsNone(alertas[0].equipo)
+        self.assertFalse(
+            any(evento.tipo.value == "Escalado" for evento in self.eventos())
+        )
+        self.assertEqual(len(self.ordenes()), 1)
+        orden = self.ordenes()[0]
+        self.assertEqual(orden.evento_ids, [alertas[0].id])
+        self.assertEqual(orden.equipo, "B-101")
+        self.assertEqual(orden.tareas, [])
+        self.assertEqual(orden.estado, EstadoOrden.pendiente)
+        self.assertNotEqual(orden.estado, EstadoOrden.aprobada)
+        self.assertEqual(
+            orden.motivo,
+            "posible daño estructural: revisión humana obligatoria",
+        )
+        self.assertEqual(orden.ejecutor, "propio")
+        self.assertFalse(orden.detiene_equipo)
+        self.assertFalse(orden.reduce_inyeccion)
+        self.assertEqual(orden.repuestos, [])
+
+    def test_alerta_seguridad_sale_aunque_falle_la_persistencia(self):
+        texto = (
+            "¡Atención! Se rompió algo en la descarga de la uno, sale agua a "
+            "presión para todos lados, me alejé. Saqué foto desde lejos."
+        )
+        nota_seguridad = nota("NOTA-00002").model_copy(
+            update={"fotos": ["/media/fotos/rotura_descarga/04.jpg"]}
+        )
+        error = ErrorPersistenciaOrden(
+            "guardar orden", RuntimeError("postgres caído")
+        )
+
+        with patch(
+            "sistema.coordinador.publicar_orden", side_effect=error
+        ), self.assertLogs("sistema.coordinador", level="ERROR") as logs:
+            self.coordinador.procesar_nota(
+                nota_seguridad, texto, [Deteccion("S1", "agua a presion")]
+            )
+
+        self.assertTrue(
+            any(evento.tipo.value == "AlertaSeguridad" for evento in self.eventos())
+        )
+        self.assertTrue(
+            any(
+                modelo.pantalla is not None
+                and modelo.pantalla.titulo == "Alerta de seguridad"
+                for topico, modelo in self.cliente.publicados
+                if topico == Topicos.TABLET
+            )
+        )
+        self.assertEqual(self.ordenes(), [])
+        texto_logs = "\n".join(logs.output)
+        self.assertIn(
+            "no se pudo publicar la orden de revisión humana", texto_logs
+        )
+        self.assertIn("Traceback", texto_logs)
 
 
 class TestCoordinadorReanudacion(unittest.TestCase):

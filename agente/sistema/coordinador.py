@@ -35,7 +35,12 @@ from .corte import MAX_CORRECCIONES, mensaje_corte
 from .eventos import eventos_parte
 from .interpretacion import interpretar
 from .mqtt import ClienteMQTT
-from .ordenes import RepositorioOrdenes
+from .ordenes import (
+    RegistroOrdenesMemoria,
+    RepositorioOrdenes,
+    construir_orden,
+    publicar_orden,
+)
 from .parte import ItemParte, extraer_items
 from .repositorio import EstadoNota, RepositorioMemoria
 from .seguridad import Deteccion
@@ -60,6 +65,7 @@ class CoordinadorPartes:
         self._catalogo = catalogo
         self._timeout_pregunta_s = timeout_pregunta_s
         self._repositorio_ordenes = repositorio_ordenes
+        self._registro_ordenes = RegistroOrdenesMemoria()
         self._almacen_anomalias = (
             almacen_anomalias if almacen_anomalias is not None else AlmacenAnomalias()
         )
@@ -170,7 +176,8 @@ class CoordinadorPartes:
     def _procesar_seguridad(
         self, nota: NotaRecorrida, texto: str, detecciones: list[Deteccion]
     ) -> None:
-        for evento in eventos_seguridad(nota, detecciones):
+        eventos = eventos_seguridad(nota, detecciones)
+        for evento in eventos:
             self._cliente.publicar(Topicos.EVENTOS, evento)
         self._cliente.publicar(Topicos.TABLET, mensaje_seguridad(nota, detecciones))
 
@@ -197,6 +204,68 @@ class CoordinadorPartes:
         self._repositorio.guardar_estado(estado)
         self._cliente.publicar(Topicos.TABLET, mensaje)
         log.info("nota %s seguridad: alerta, aviso y borrador publicados", nota.id)
+
+        try:
+            self._publicar_orden_seguridad(nota, texto, eventos, detecciones)
+        except Exception:
+            log.exception(
+                "no se pudo publicar la orden de revisión humana para la nota %s",
+                nota.id,
+            )
+
+    def _publicar_orden_seguridad(
+        self,
+        nota: NotaRecorrida,
+        texto: str,
+        eventos: list[EventoSistema],
+        detecciones: list[Deteccion],
+    ) -> None:
+        if not nota.fotos or not any(
+            deteccion.categoria == "S1" for deteccion in detecciones
+        ):
+            return
+        equipo = self._catalogo.buscar_tag(texto)
+        if equipo is None:
+            return
+        evento_s1 = next(
+            (
+                evento
+                for evento, deteccion in zip(eventos, detecciones)
+                if deteccion.categoria == "S1"
+            ),
+            None,
+        )
+        if evento_s1 is None:
+            return
+
+        evento_con_equipo = evento_s1.model_copy(update={"equipo": equipo})
+        orden = construir_orden(
+            evento_con_equipo,
+            equipo,
+            [],
+            ejecutor="propio",
+            catalogo_tareas=[],
+            catalogo_stock=[],
+        )
+        decidida = orden.model_copy(
+            update={
+                "estado": EstadoOrden.pendiente,
+                "motivo": "posible daño estructural: revisión humana obligatoria",
+            }
+        )
+        publicada = publicar_orden(
+            decidida,
+            None,
+            self._cliente.publicar,
+            self._registro_ordenes,
+            self._repositorio_ordenes,
+        )
+        if publicada is not None:
+            log.info(
+                "nota %s seguridad: orden %s pendiente por daño estructural publicada",
+                nota.id,
+                publicada.id,
+            )
 
     def _procesar_parte(self, nota: NotaRecorrida, texto: str) -> None:
         items = extraer_items(texto, self._catalogo.unidades_manometro())
