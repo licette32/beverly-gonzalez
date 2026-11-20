@@ -44,6 +44,13 @@ from .ordenes import (
 )
 from .parte import ItemParte, extraer_items
 from .repositorio import EstadoNota, RepositorioMemoria
+from .repositorio_decisiones import (
+    RegistroDecisiones,
+    argumentos_historian,
+    correlation_de_orden,
+    medir_y_registrar,
+    registrar_herramienta,
+)
 from .seguridad import Deteccion
 
 log = logging.getLogger(__name__)
@@ -61,6 +68,7 @@ class CoordinadorPartes:
         encolar_orden: Callable[[EventoSistema, EvidenciaEquipo, bool], None]
         | None = None,
         pendientes: ColaPendientes | None = None,
+        registro: RegistroDecisiones | None = None,
     ) -> None:
         self._cliente = cliente
         self._repositorio = repositorio
@@ -73,6 +81,7 @@ class CoordinadorPartes:
         )
         self._encolar_orden = encolar_orden
         self._pendientes = pendientes
+        self._registro = registro
         self._cola: queue.Queue[RespuestaOperador | None] = queue.Queue()
         self._detener = threading.Event()
         self._hilo: threading.Thread | None = None
@@ -96,7 +105,11 @@ class CoordinadorPartes:
             )
             if orden.estado == EstadoOrden.pendiente:
                 try:
-                    publicada = publicar_orden(
+                    publicada = medir_y_registrar(
+                        self._registro,
+                        correlation_id,
+                        "publicar_orden",
+                        publicar_orden,
                         orden,
                         None,
                         self._cliente.publicar,
@@ -277,7 +290,11 @@ class CoordinadorPartes:
                 "motivo": "posible daño estructural: revisión humana obligatoria",
             }
         )
-        publicada = publicar_orden(
+        publicada = medir_y_registrar(
+            self._registro,
+            correlation_de_orden(decidida),
+            "publicar_orden",
+            publicar_orden,
             decidida,
             None,
             self._cliente.publicar,
@@ -334,7 +351,18 @@ class CoordinadorPartes:
             item = items[ambiguedad.indice]
             if item.tag is None:
                 continue
-            rango = historian_rango(item.tag, item.variable, nota.ts)
+            desde = (nota.ts - timedelta(days=45)).isoformat()
+            hasta = nota.ts.isoformat()
+            rango = registrar_herramienta(
+                self._registro,
+                nota.id,
+                "historian",
+                argumentos_historian(item.tag, item.variable, desde, hasta),
+                historian_rango,
+                item.tag,
+                item.variable,
+                nota.ts,
+            )
             if rango is not None:
                 minimo, maximo = rango
                 partes.append(

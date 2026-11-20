@@ -4,11 +4,19 @@ import argparse
 import json
 import logging
 import sys
+import time
 
 from sistema.config import MQTT_HOST, MQTT_PORT, POSTGRES_DSN, SISTEMA
 from sistema.mqtt import ClienteMQTT
 from sistema.ordenes import ErrorEstadoEsperado, publicar_orden
 from sistema.repositorio_cierres import RepositorioCierresPostgres
+from sistema.repositorio_decisiones import (
+    MODELO_HUMANO,
+    RegistroDecisiones,
+    RepositorioDecisionesPostgres,
+    correlation_de_orden,
+    registrar_directo,
+)
 from sistema.repositorio_ordenes import (
     ErrorPersistenciaOrden,
     RepositorioOrdenesPostgres,
@@ -48,9 +56,17 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv=None, repositorio=None, cliente=None, repositorio_cierres=None) -> int:
+def main(
+    argv=None,
+    repositorio=None,
+    cliente=None,
+    repositorio_cierres=None,
+    registro: RegistroDecisiones | None = None,
+) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    if registro is None and POSTGRES_DSN:
+        registro = RepositorioDecisionesPostgres(POSTGRES_DSN)
     if args.comando != "cierre" and not args.por:
         parser.error("--por es obligatorio")
     log.info(
@@ -91,6 +107,7 @@ def main(argv=None, repositorio=None, cliente=None, repositorio_cierres=None) ->
             return 1
         repositorio = RepositorioOrdenesPostgres(POSTGRES_DSN)
 
+    inicio = time.perf_counter()
     propio = cliente is None
     if propio:
         cliente = ClienteMQTT(MQTT_HOST, MQTT_PORT, f"{SISTEMA}-cli")
@@ -105,6 +122,7 @@ def main(argv=None, repositorio=None, cliente=None, repositorio_cierres=None) ->
         if leida is None:
             print(f"orden {args.orden_id} no encontrada", file=sys.stderr)
             return 1
+        correlation_id = correlation_de_orden(leida)
 
         try:
             nueva = transicionar(
@@ -129,6 +147,24 @@ def main(argv=None, repositorio=None, cliente=None, repositorio_cierres=None) ->
             return 1
 
         estado = publicada.estado if publicada is not None else nueva.estado
+        argumentos: dict[str, object] = {"len_por": len(args.por)}
+        motivo = getattr(args, "motivo", None)
+        habilita = getattr(args, "habilita", None)
+        monto = getattr(args, "monto", None)
+        if motivo is not None:
+            argumentos["len_motivo"] = len(motivo)
+        if habilita is not None:
+            argumentos["len_habilita"] = len(habilita)
+        if monto is not None:
+            argumentos["monto"] = monto
+        registrar_directo(
+            registro,
+            correlation_id=correlation_id,
+            paso=args.comando,
+            modelo=MODELO_HUMANO,
+            argumentos=argumentos,
+            duracion_ms=max(0, int((time.perf_counter() - inicio) * 1000)),
+        )
         log.info("cli aplicada orden=%s estado=%s", args.orden_id, estado.value)
         print(f"{args.orden_id}: {estado.value}")
         return 0

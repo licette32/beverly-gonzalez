@@ -16,6 +16,12 @@ from .catalogo import EstadoPlanta
 from .flujo import CatalogoFlujo, CatalogoTools, ResultadoFlujo
 from .flujo import procesar as procesar_flujo
 from .ordenes import ErrorEstadoEsperado, RepositorioOrdenes, publicar_orden
+from .repositorio_decisiones import (
+    RegistroDecisiones,
+    argumentos_historial_ordenes,
+    medir_y_registrar,
+    registrar_herramienta,
+)
 from .repositorio_ordenes import ErrorPersistenciaOrden
 
 log = logging.getLogger(__name__)
@@ -32,8 +38,20 @@ class TrabajoOrden:
     fotos_pendientes_de_analisis: bool = False
 
 
-def _historial_por_equipo(equipo: str) -> Sequence[Any]:
-    return list(tools.historial_ordenes(equipo).ordenes)
+def _historial_por_equipo(
+    equipo: str,
+    correlation_id: str,
+    registro: RegistroDecisiones | None = None,
+) -> Sequence[Any]:
+    respuesta = registrar_herramienta(
+        registro,
+        correlation_id,
+        "historial_ordenes",
+        argumentos_historial_ordenes(equipo),
+        tools.historial_ordenes,
+        equipo,
+    )
+    return list(respuesta.ordenes)
 
 
 class WorkerOrdenes(threading.Thread):
@@ -46,6 +64,7 @@ class WorkerOrdenes(threading.Thread):
         estado_bombas: Callable[[], dict[str, str] | None] | None = None,
         historial: Callable[[str], Sequence[Any]] | None = None,
         procesar: Callable[..., ResultadoFlujo] | None = None,
+        registro: RegistroDecisiones | None = None,
     ) -> None:
         super().__init__(name="ordenes", daemon=True)
         self._publicador = publicador
@@ -55,10 +74,9 @@ class WorkerOrdenes(threading.Thread):
         self._estado_bombas = (
             estado_bombas if estado_bombas is not None else estado.estado_bombas
         )
-        self._historial_fn = (
-            historial if historial is not None else _historial_por_equipo
-        )
+        self._historial_fn = historial
         self._procesar = procesar if procesar is not None else procesar_flujo
+        self._registro = registro
         self._cola: queue.Queue[TrabajoOrden | None] = queue.Queue()
         self._cache: dict[ClaveOrden, str] = {}
         self._lock = threading.Lock()
@@ -120,18 +138,24 @@ class WorkerOrdenes(threading.Thread):
             log.exception("no se pudo leer el estado de las bombas")
             return None
 
-    def _historial(self, equipo: str) -> Sequence[Any]:
+    def _historial(self, equipo: str, correlation_id: str) -> Sequence[Any]:
         try:
-            return self._historial_fn(equipo)
+            if self._historial_fn is not None:
+                return self._historial_fn(equipo)
+            return _historial_por_equipo(equipo, correlation_id, self._registro)
         except Exception:
             log.warning("no se pudo leer el historial de %s; se sigue sin reordenar", equipo)
             return []
 
     def _procesar_trabajo(self, trabajo: TrabajoOrden) -> None:
         evento = trabajo.evento
+        correlation_id = evento.id
         equipo = evento.equipo or ""
         estado_bombas = self._estado_actual()
-        historial = self._historial(equipo)
+        historial = self._historial(equipo, correlation_id)
+        opciones: dict[str, Any] = {}
+        if self._registro is not None:
+            opciones["registro"] = self._registro
         resultado = self._procesar(
             evento,
             trabajo.evidencia,
@@ -139,6 +163,7 @@ class WorkerOrdenes(threading.Thread):
             self._catalogo,
             estado_bombas,
             trabajo.fotos_pendientes_de_analisis,
+            **opciones,
         )
         log.info("diagnóstico evento=%s equipo=%s historial=%d causas=%s", evento.id, equipo, len(historial), [(c.codigo_falla, c.accion, c.tarea_codigo) for c in resultado.causas])
         if resultado.orden is None:
@@ -158,7 +183,11 @@ class WorkerOrdenes(threading.Thread):
         publicada = None
         for intento in range(1, REINTENTOS_PUBLICAR_ORDEN + 1):
             try:
-                publicada = publicar_orden(
+                publicada = medir_y_registrar(
+                    self._registro,
+                    correlation_id,
+                    "publicar_orden",
+                    publicar_orden,
                     orden,
                     None,
                     self._publicador,

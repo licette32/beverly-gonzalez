@@ -35,6 +35,7 @@ from .mqtt import ClienteMQTT
 from .ordenes_worker import WorkerOrdenes
 from .repositorio import crear_repositorio
 from .repositorio_cierres import RepositorioCierresPostgres
+from .repositorio_decisiones import RepositorioDecisionesPostgres
 from .repositorio_ordenes import RepositorioOrdenesPostgres
 from .sensores import VentanaSensores
 from .transcripcion import Transcriptor
@@ -83,6 +84,9 @@ def main() -> None:
     repositorio_cierres = (
         RepositorioCierresPostgres(POSTGRES_DSN) if POSTGRES_DSN else None
     )
+    registro_decisiones = (
+        RepositorioDecisionesPostgres(POSTGRES_DSN) if POSTGRES_DSN else None
+    )
     almacen_anomalias = AlmacenAnomalias()
     cola_pendientes = ColaPendientes()
     sonda_enlace = SondaEnlace(
@@ -96,7 +100,9 @@ def main() -> None:
         return repositorio.pendientes_sincronizar() + cola_pendientes.cantidad()
 
     worker_ordenes = (
-        WorkerOrdenes(cliente.publicar, repositorio_ordenes)
+        WorkerOrdenes(
+            cliente.publicar, repositorio_ordenes, registro=registro_decisiones
+        )
         if repositorio_ordenes is not None
         else None
     )
@@ -106,6 +112,7 @@ def main() -> None:
             repositorio_ordenes,
             transcriptor,
             publicador=cliente.publicar,
+            registro=registro_decisiones,
         )
         if repositorio_cierres is not None and repositorio_ordenes is not None
         else None
@@ -129,6 +136,7 @@ def main() -> None:
         almacen_anomalias=almacen_anomalias,
         encolar_orden=encolar_orden,
         pendientes=cola_pendientes,
+        registro=registro_decisiones,
     )
     worker = WorkerNotas(cliente, transcriptor, coordinador)
     ventana_sensores = VentanaSensores(
@@ -170,9 +178,11 @@ def main() -> None:
             cliente.al_recibir_cierre = ManejadorCierres(
                 repositorio_ordenes,
                 cliente.publicar,
-                repositorio_cierres,
-                worker_cierres.encolar,
-            )
+            repositorio_cierres,
+            worker_cierres.encolar,
+            registro=registro_decisiones,
+        )
+
     if cierres_worker_no_arranco:
         logging.getLogger(__name__).warning(
             "los cierres no se procesan porque el worker no arrancó"

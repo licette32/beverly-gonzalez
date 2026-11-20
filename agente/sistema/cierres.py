@@ -14,6 +14,11 @@ from planta_contrato import EstadoOrden, NotaCierre, OrdenSistema, Topicos
 from . import audio
 from .config import TRANSCRIPCION_LIMITE_S
 from .ordenes import RepositorioOrdenes
+from .repositorio_decisiones import (
+    RegistroDecisiones,
+    correlation_de_orden,
+    medir_y_registrar,
+)
 from .parte_cierre import (
     DiferenciaCierre,
     ParteCierre,
@@ -42,6 +47,7 @@ def aplicar_cierre(
     publicador: Callable[[str, BaseModel], None],
     *,
     republicar_si_ejecutada: bool = False,
+    registro: RegistroDecisiones | None = None,
 ) -> OrdenSistema | None:
     orden = repositorio.obtener(nota.orden_id)
     if orden is None:
@@ -52,27 +58,32 @@ def aplicar_cierre(
         )
         return None
 
-    if orden.estado is EstadoOrden.ejecutada:
-        log.info("cierre idempotente %s: orden %s ya ejecutada", nota.id, orden.id)
-        if republicar_si_ejecutada:
-            publicador(Topicos.ORDENES, orden)
-        return None
+    def aplicar() -> OrdenSistema | None:
+        if orden.estado is EstadoOrden.ejecutada:
+            log.info("cierre idempotente %s: orden %s ya ejecutada", nota.id, orden.id)
+            if republicar_si_ejecutada:
+                publicador(Topicos.ORDENES, orden)
+            return None
 
-    try:
-        ejecutada = transicionar(orden, Accion.registrar_cierre, nota=nota)
-    except ErrorTransicion as exc:
-        log.error("anomalía en cierre %s: %s", nota.id, exc)
-        return None
+        try:
+            ejecutada = transicionar(orden, Accion.registrar_cierre, nota=nota)
+        except ErrorTransicion as exc:
+            log.error("anomalía en cierre %s: %s", nota.id, exc)
+            return None
 
-    repositorio.guardar(ejecutada)
-    publicador(Topicos.ORDENES, ejecutada)
-    log.info(
-        "cierre %s aplicado: orden %s pasó a %s",
-        nota.id,
-        orden.id,
-        ejecutada.estado.value,
+        repositorio.guardar(ejecutada)
+        publicador(Topicos.ORDENES, ejecutada)
+        log.info(
+            "cierre %s aplicado: orden %s pasó a %s",
+            nota.id,
+            orden.id,
+            ejecutada.estado.value,
+        )
+        return ejecutada
+
+    return medir_y_registrar(
+        registro, correlation_de_orden(orden), "aplicar_cierre", aplicar
     )
-    return ejecutada
 
 
 class ManejadorCierres:
@@ -82,11 +93,13 @@ class ManejadorCierres:
         publicador: Callable[[str, BaseModel], None],
         repositorio_cierres: Any = None,
         encolar: Callable[[NotaCierre], None] | None = None,
+        registro: RegistroDecisiones | None = None,
     ) -> None:
         self._repositorio = repositorio
         self._publicador = publicador
         self._cierres = repositorio_cierres
         self._encolar = encolar
+        self._registro = registro
 
     def __call__(self, nota: NotaCierre) -> OrdenSistema | None:
         if self._cierres is not None:
@@ -95,7 +108,9 @@ class ManejadorCierres:
             except Exception:
                 log.exception("no se pudo guardar el cierre %s al recibirlo", nota.id)
 
-        ejecutada = aplicar_cierre(nota, self._repositorio, self._publicador)
+        ejecutada = aplicar_cierre(
+            nota, self._repositorio, self._publicador, registro=self._registro
+        )
         if ejecutada is not None and self._encolar is not None:
             self._encolar(nota)
         return ejecutada
@@ -112,6 +127,7 @@ class WorkerCierres(threading.Thread):
         limite_transcripcion_s: float = TRANSCRIPCION_LIMITE_S,
         reintentos_transcripcion: int = REINTENTOS_TRANSCRIPCION,
         descargar: Callable[[str, str], Path] | None = None,
+        registro: RegistroDecisiones | None = None,
     ) -> None:
         super().__init__(name="cierres", daemon=True)
         self._cierres = repositorio_cierres
@@ -121,6 +137,7 @@ class WorkerCierres(threading.Thread):
         self._limite_transcripcion_s = limite_transcripcion_s
         self._reintentos = reintentos_transcripcion
         self._descargar = descargar if descargar is not None else audio.descargar_audio
+        self._registro = registro
         self._transcripcion = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="transcribir-cierre"
         )
@@ -152,6 +169,7 @@ class WorkerCierres(threading.Thread):
                     self._ordenes,
                     self._publicador,
                     republicar_si_ejecutada=True,
+                    registro=self._registro,
                 )
             except Exception:
                 log.exception(

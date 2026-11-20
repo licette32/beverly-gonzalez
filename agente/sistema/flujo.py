@@ -18,6 +18,13 @@ from .causas import Causa, EvidenciaEquipo, causas_probables
 from .historial_causas import reordenar_con_historial
 from .ordenes import construir_orden
 from .reglas import ContextoReglas, evaluar
+from .repositorio_decisiones import (
+    RegistroDecisiones,
+    argumentos_manuales_buscar,
+    argumentos_stock,
+    medir_y_registrar,
+    registrar_herramienta,
+)
 from .validacion import Problema, validar_orden_publicable
 
 if TYPE_CHECKING:
@@ -137,13 +144,43 @@ def procesar(
     catalogo: CatalogoFlujo,
     estado_bombas: Mapping[str, str] | None = None,
     fotos_pendientes_de_analisis: bool = False,
+    registro: RegistroDecisiones | None = None,
 ) -> ResultadoFlujo:
     """Encadena causas, historial, orden y reglas sin LLM ni efectos externos."""
-    causas = reordenar_con_historial(
-        causas_probables(evidencia), historial, evidencia
+    correlation_id = evento.id
+
+    def buscar(texto: str):
+        return registrar_herramienta(
+            registro,
+            correlation_id,
+            "manuales_buscar",
+            argumentos_manuales_buscar(texto),
+            tools.manuales_buscar,
+            texto,
+        )
+
+    causas_base = medir_y_registrar(
+        registro, correlation_id, "causas_probables", causas_probables, evidencia, buscar=buscar
     )
-    tareas = list(catalogo.tareas_catalogo())
-    no_estandar = list(catalogo.tareas_no_estandar())
+    causas = medir_y_registrar(
+        registro,
+        correlation_id,
+        "reordenar_con_historial",
+        reordenar_con_historial,
+        causas_base,
+        historial,
+        evidencia,
+    )
+    tareas = list(
+        registrar_herramienta(
+            registro, correlation_id, "tareas_catalogo", {}, catalogo.tareas_catalogo
+        )
+    )
+    no_estandar = list(
+        registrar_herramienta(
+            registro, correlation_id, "materiales", {}, catalogo.tareas_no_estandar
+        )
+    )
     candidata = next(
         (
             causa
@@ -157,20 +194,31 @@ def procesar(
     if candidata is None:
         return ResultadoFlujo(causas, None, None, ("SIN_ORDEN",), ())
 
+    tarea = candidata.tarea_codigo or ""
     equipo = candidata.equipo_orden
-    stock_equipo = list(catalogo.stock(equipo))
-    if not _tarea_en_catalogo(
-        tareas, no_estandar, candidata.tarea_codigo or "", equipo, stock_equipo
-    ):
+    stock_equipo = list(
+        registrar_herramienta(
+            registro,
+            correlation_id,
+            "stock",
+            argumentos_stock(equipo),
+            catalogo.stock,
+            equipo,
+        )
+    )
+    if not _tarea_en_catalogo(tareas, no_estandar, tarea, equipo, stock_equipo):
         return ResultadoFlujo(causas, None, None, ("EQUIPO_SIN_CATALOGO",), ())
 
-    pedidos = _repuestos_de_tarea(
-        tareas, no_estandar, candidata.tarea_codigo or "", equipo
-    )
-    orden = construir_orden(
+    pedidos = _repuestos_de_tarea(tareas, no_estandar, tarea, equipo)
+    orden = medir_y_registrar(
+        registro,
+        correlation_id,
+        "construir_orden",
+        construir_orden,
         evento,
         equipo,
-        [candidata.tarea_codigo or ""],
+        [tarea],
+        tarea=tarea,
         ejecutor=candidata.ejecutor,
         repuestos=pedidos,
         estado_bombas=estado_bombas,
@@ -190,7 +238,9 @@ def procesar(
         dano_estructural_grave=False,
         fotos_pendientes_de_analisis=fotos_pendientes_de_analisis,
     )
-    estado, motivo = evaluar(orden, contexto)
+    estado, motivo = medir_y_registrar(
+        registro, correlation_id, "evaluar", evaluar, orden, contexto, tarea=tarea
+    )
     if estado == EstadoOrden.pendiente:
         pendiente_por = _motivos_unicos(*pendiente_por, motivo)
 
@@ -201,8 +251,18 @@ def procesar(
         estado_final = EstadoOrden.aprobada
         motivo_final = motivo
 
-    hallazgos = validar_orden_publicable(
-        orden, candidata.citas, tools._cargar_materiales()
+    materiales = registrar_herramienta(
+        registro, correlation_id, "materiales", {}, tools._cargar_materiales
+    )
+    hallazgos = medir_y_registrar(
+        registro,
+        correlation_id,
+        "validar_orden_publicable",
+        validar_orden_publicable,
+        orden,
+        candidata.citas,
+        materiales,
+        tarea=tarea,
     )
     if hallazgos:
         if estado_final == EstadoOrden.aprobada:
