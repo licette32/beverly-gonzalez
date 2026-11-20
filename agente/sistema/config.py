@@ -20,6 +20,22 @@ CATALOGO_TIMEOUT_S = float(os.getenv("CATALOGO_TIMEOUT_S", "5"))
 HISTORIAN_TIMEOUT_S = float(os.getenv("HISTORIAN_TIMEOUT_S", "5"))
 HISTORIAL_TIMEOUT_S = float(os.getenv("HISTORIAL_TIMEOUT_S", "5"))
 PREGUNTA_TIMEOUT_S = float(os.getenv("PREGUNTA_TIMEOUT_S", "60"))
+LLM_HABILITADO = os.getenv("LLM_HABILITADO", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:11434")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_MODELO = os.getenv("LLM_MODELO", "ministral-3:3b")
+LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "120"))
+LLM_COSTO_USD_POR_MTOK_ENTRADA = float(
+    os.getenv("LLM_COSTO_USD_POR_MTOK_ENTRADA", "0")
+)
+LLM_COSTO_USD_POR_MTOK_SALIDA = float(
+    os.getenv("LLM_COSTO_USD_POR_MTOK_SALIDA", "0")
+)
 TRANSCRIPCION_LIMITE_S = float(os.getenv("TRANSCRIPCION_LIMITE_S", "90"))
 MAX_CORRECCIONES = int(os.getenv("MAX_CORRECCIONES", "5"))
 SENSORES_HORIZONTE_HORAS = float(os.getenv("SENSORES_HORIZONTE_HORAS", "6"))

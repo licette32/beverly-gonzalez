@@ -15,6 +15,7 @@ from .causas import EvidenciaEquipo
 from .catalogo import EstadoPlanta
 from .flujo import CatalogoFlujo, CatalogoTools, ResultadoFlujo
 from .flujo import procesar as procesar_flujo
+from .llm import AnalizadorLLM
 from .ordenes import ErrorEstadoEsperado, RepositorioOrdenes, publicar_orden
 from .repositorio_decisiones import (
     RegistroDecisiones,
@@ -65,6 +66,7 @@ class WorkerOrdenes(threading.Thread):
         historial: Callable[[str], Sequence[Any]] | None = None,
         procesar: Callable[..., ResultadoFlujo] | None = None,
         registro: RegistroDecisiones | None = None,
+        analizador: AnalizadorLLM | None = None,
     ) -> None:
         super().__init__(name="ordenes", daemon=True)
         self._publicador = publicador
@@ -77,6 +79,7 @@ class WorkerOrdenes(threading.Thread):
         self._historial_fn = historial
         self._procesar = procesar if procesar is not None else procesar_flujo
         self._registro = registro
+        self._analizador = analizador
         self._cola: queue.Queue[TrabajoOrden | None] = queue.Queue()
         self._cache: dict[ClaveOrden, str] = {}
         self._lock = threading.Lock()
@@ -156,6 +159,8 @@ class WorkerOrdenes(threading.Thread):
         opciones: dict[str, Any] = {}
         if self._registro is not None:
             opciones["registro"] = self._registro
+        if self._analizador is not None:
+            opciones["analizador"] = self._analizador
         resultado = self._procesar(
             evento,
             trabajo.evidencia,

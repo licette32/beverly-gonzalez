@@ -1,5 +1,18 @@
 # INFORME TÉCNICO – Entrega 1
 
+## Entrega 2 (en curso)
+
+El análisis LLM es opcional (`LLM_HABILITADO=false` por defecto). Cuando se habilita, el adaptador usa Ollama `/api/chat` con `format` JSON Schema, valida la respuesta con Pydantic `extra="forbid"` y registra tokens/costo reales en `decisiones`. El LLM solo prioriza causas detectadas por reglas; no propone repuestos, citas, tareas, ejecutor ni estado de la orden.
+
+| Tarea | Modelo / versión | Tokens | Costo USD |
+|-------|------------------|-------:|----------:|
+| Transcripción del parte | Whisper `base` int8 (faster-whisper 1.2.1) | 0 | 0 |
+| Detección y análisis de causas | reglas + LLM opcional (`LLM_MODELO`) | 0 si LLM deshabilitado; reales si se llama | reales si se llama |
+| Borrador y estado de la orden | reglas en código (`flujo.py`, `reglas.py`) | 0 | 0 |
+| Validación de citas y repuestos | reglas en código (`validacion.py`) | 0 | 0 |
+
+Cuando no se llama al LLM, la traza de `analisis_llm` queda con `modelo="reglas"`. Si la respuesta es inválida, se descarta sin alterar `ResultadoFlujo`, pero se conservan tokens/costo reales y `argumentos.resultado="invalido"`.
+
 ## 1. Modelos Utilizados
 
 ### 1.1 Transcripción de audio

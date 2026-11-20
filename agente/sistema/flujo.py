@@ -16,6 +16,7 @@ from planta_contrato import EstadoOrden, EventoSistema, OrdenSistema, Repuesto
 from . import tools
 from .causas import Causa, EvidenciaEquipo, causas_probables
 from .historial_causas import reordenar_con_historial
+from .llm import AnalizadorLLM
 from .ordenes import construir_orden
 from .reglas import ContextoReglas, evaluar
 from .repositorio_decisiones import (
@@ -96,6 +97,18 @@ def _sumar_problemas(motivo: str, problemas: Sequence[Problema]) -> str:
     return "; ".join(segmentos)
 
 
+def _priorizar_causas(
+    causas: Sequence[Causa], prioridad: Sequence[str]
+) -> list[Causa]:
+    if not prioridad:
+        return list(causas)
+    orden = {codigo: indice for indice, codigo in enumerate(dict.fromkeys(prioridad))}
+    return sorted(
+        causas,
+        key=lambda causa: orden.get(causa.codigo_falla, len(orden)),
+    )
+
+
 def _tarea_en_catalogo(
     tareas_estandar: Sequence[dict[str, Any]],
     tareas_no_estandar: Sequence[dict[str, Any]],
@@ -145,8 +158,9 @@ def procesar(
     estado_bombas: Mapping[str, str] | None = None,
     fotos_pendientes_de_analisis: bool = False,
     registro: RegistroDecisiones | None = None,
+    analizador: AnalizadorLLM | None = None,
 ) -> ResultadoFlujo:
-    """Encadena causas, historial, orden y reglas sin LLM ni efectos externos."""
+    """Encadena causas, análisis opcional, orden y reglas deterministas."""
     correlation_id = evento.id
 
     def buscar(texto: str):
@@ -171,6 +185,16 @@ def procesar(
         historial,
         evidencia,
     )
+    if analizador is not None:
+        analisis = analizador.analizar(
+            evento=evento,
+            evidencia=evidencia,
+            historial=historial,
+            causas=causas,
+            registro=registro,
+        )
+        if analisis is not None:
+            causas = _priorizar_causas(causas, analisis.prioridad)
     tareas = list(
         registrar_herramienta(
             registro, correlation_id, "tareas_catalogo", {}, catalogo.tareas_catalogo

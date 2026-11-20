@@ -171,7 +171,9 @@ docker compose -p planta -f academia2026-tp/docker-compose.yml up -d broker enla
 docker compose -p alumno-novit up -d --build
 ```
 
-Variables de entorno (opcionales, ver `.env.example`): `MQTT_HOST`, `POSTGRES_DSN`, `PREGUNTA_TIMEOUT_S`, `OMP_NUM_THREADS`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `INDEXAR_PG_AL_ARRANCAR`.
+Variables de entorno (opcionales, ver `.env.example`): `MQTT_HOST`, `POSTGRES_DSN`, `PREGUNTA_TIMEOUT_S`, `OMP_NUM_THREADS`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `INDEXAR_PG_AL_ARRANCAR`, `LLM_HABILITADO`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODELO`, `LLM_TIMEOUT_S`, `LLM_COSTO_USD_POR_MTOK_ENTRADA`, `LLM_COSTO_USD_POR_MTOK_SALIDA`.
+
+El adaptador LLM es opcional y viene apagado (`LLM_HABILITADO=false`). Si se habilita, usa Ollama en `/api/chat`; el host local debe estar en `NO_PROXY`. No hay servicio Ollama en el compose principal; si se necesita uno local, usar un compose opcional separado. El LLM solo reordena causas ya detectadas por reglas y no decide el estado de la orden: ante error, timeout, JSON inválido o enlace caído con host externo, el flujo sigue determinista y encola el análisis pendiente cuando corresponde.
 
 ### Cómo verificar el flujo
 
@@ -200,7 +202,7 @@ Si el contenedor `broker` incluye `mosquitto_sub`, se puede mirar el tráfico:
 
 ```bash
 pip install -r agente/requirements.txt
-python -m pytest tests -q            # 151 passed, 1 skipped (necesita POSTGRES_DSN)
+python -m pytest tests -q            # 435 passed, 8 skipped, 113 subtests passed
 python evaluacion/retrieval_eval.py  # recall@k del RAG (con la planta arriba)
 
 # Evaluación oficial del curso

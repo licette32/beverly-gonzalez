@@ -15,10 +15,17 @@ services:
       TZ: ${TZ:-America/Argentina/Buenos_Aires}
       HTTP_PROXY: ${HTTP_PROXY:-http://enlace:3128}
       HTTPS_PROXY: ${HTTPS_PROXY:-http://enlace:3128}
-      NO_PROXY: ${NO_PROXY:-broker,sim,localhost,postgres}
+      NO_PROXY: ${NO_PROXY:-broker,sim,localhost,127.0.0.1,postgres,ollama}
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql://novit:novit@postgres:5432/novit}
       POSTGRES_REINTENTO_S: ${POSTGRES_REINTENTO_S:-2}
       PREGUNTA_TIMEOUT_S: ${PREGUNTA_TIMEOUT_S:-60}
+      LLM_HABILITADO: ${LLM_HABILITADO:-false}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://localhost:11434}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODELO: ${LLM_MODELO:-ministral-3:3b}
+      LLM_TIMEOUT_S: ${LLM_TIMEOUT_S:-120}
+      LLM_COSTO_USD_POR_MTOK_ENTRADA: ${LLM_COSTO_USD_POR_MTOK_ENTRADA:-0}
+      LLM_COSTO_USD_POR_MTOK_SALIDA: ${LLM_COSTO_USD_POR_MTOK_SALIDA:-0}
     networks:
       - planta-lan
     init: true

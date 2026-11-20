@@ -16,6 +16,13 @@ from .config import (
     ENLACE_SONDA_URL,
     HEARTBEAT_S,
     INDEXAR_PG_AL_ARRANCAR,
+    LLM_API_KEY,
+    LLM_BASE_URL,
+    LLM_COSTO_USD_POR_MTOK_ENTRADA,
+    LLM_COSTO_USD_POR_MTOK_SALIDA,
+    LLM_HABILITADO,
+    LLM_MODELO,
+    LLM_TIMEOUT_S,
     LOG_LEVEL,
     MQTT_HOST,
     MQTT_PORT,
@@ -31,6 +38,7 @@ from .config import (
 from .coordinador import CoordinadorPartes
 from .eventos_sensores import WorkerSensores
 from .heartbeat import ColaPendientes, Latido, SondaEnlace
+from .llm import AnalizadorLLM
 from .mqtt import ClienteMQTT
 from .ordenes_worker import WorkerOrdenes
 from .repositorio import crear_repositorio
@@ -95,13 +103,28 @@ def main() -> None:
         intervalo_s=ENLACE_SONDA_INTERVALO_S,
         al_cambio=cola_pendientes.actualizar_enlace,
     )
+    analizador = AnalizadorLLM(
+        habilitado=LLM_HABILITADO,
+        base_url=LLM_BASE_URL,
+        api_key=LLM_API_KEY,
+        modelo=LLM_MODELO,
+        timeout_s=LLM_TIMEOUT_S,
+        costo_entrada=LLM_COSTO_USD_POR_MTOK_ENTRADA,
+        costo_salida=LLM_COSTO_USD_POR_MTOK_SALIDA,
+        enlace_ok=lambda: sonda_enlace.arriba,
+        pendientes=cola_pendientes,
+        registro=registro_decisiones,
+    )
 
     def pendientes_totales() -> int:
         return repositorio.pendientes_sincronizar() + cola_pendientes.cantidad()
 
     worker_ordenes = (
         WorkerOrdenes(
-            cliente.publicar, repositorio_ordenes, registro=registro_decisiones
+            cliente.publicar,
+            repositorio_ordenes,
+            registro=registro_decisiones,
+            analizador=analizador,
         )
         if repositorio_ordenes is not None
         else None
