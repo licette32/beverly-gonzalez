@@ -48,6 +48,9 @@ class RepositorioOrdenesFalso:
             raise self.error
         return list(self.pendientes)
 
+    def ordenes_abiertas(self, equipo):
+        return []
+
 
 def orden_para_reanudar(orden_id, estado) -> OrdenSistema:
     return OrdenSistema(

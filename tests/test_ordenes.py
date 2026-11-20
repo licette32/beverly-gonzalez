@@ -78,6 +78,9 @@ class RepositorioOrdenesFalso:
     def cargar_pendientes(self):
         return []
 
+    def ordenes_abiertas(self, equipo):
+        return [orden for orden in self.guardadas if orden.equipo == equipo]
+
 
 def evento_sensor(equipo="B-101", evento_id="EV-SENSOR-1"):
     return EventoSistema(

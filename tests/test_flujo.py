@@ -2,6 +2,16 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+_patch_citas = patch("sistema.causas.verificar_cita", return_value=True)
+
+
+def setUpModule():
+    _patch_citas.start()
+
+
+def tearDownModule():
+    _patch_citas.stop()
+
 from planta_contrato import EstadoOrden
 from test_ordenes import evento_sensor
 
@@ -182,7 +192,7 @@ class TestFlujo(ConCitas):
         )
         self.assertNotIn(resultado.orden.equipo, ("B-101", "B-102", "B-103"))
 
-    def test_reten_resuelto_no_cambia_causas_y_da_sin_orden(self):
+    def test_reten_resuelto_no_cambia_causas_y_sale_inspeccion(self):
         ev = evidencia("B-102", [anomalia("B-102", "vibracion", "alta")])
         base = causas_probables(ev)
         historial = [
@@ -214,11 +224,12 @@ class TestFlujo(ConCitas):
             [causa.codigo_falla for causa in resultado.causas],
             [causa.codigo_falla for causa in base],
         )
-        self.assertIsNone(resultado.orden)
-        self.assertIsNone(resultado.reglas)
-        self.assertEqual(resultado.problemas, ("SIN_ORDEN",))
+        self.assertEqual(resultado.orden.equipo, "B-102")
+        self.assertEqual(resultado.orden.tareas, ["I-VIB"])
+        self.assertEqual(resultado.problemas, ())
+        self.assertEqual(resultado.orden.estado, EstadoOrden.pendiente)
 
-    def test_h_emb_real_es_inspeccion_y_da_sin_orden(self):
+    def test_h_emb_no_se_inserta_y_sale_inspeccion_actual(self):
         ev = evidencia("B-103", [anomalia("B-103", "vibracion", "alta")])
         historial = [
             orden_historica(
@@ -231,12 +242,44 @@ class TestFlujo(ConCitas):
         ]
         resultado = procesar(evento_sensor("B-103"), ev, historial, CatalogoTools())
 
-        h_emb = [c for c in resultado.causas if c.codigo_falla == "H-EMB"]
-        self.assertEqual(len(h_emb), 1)
-        self.assertIsNone(h_emb[0].tarea_codigo)
-        self.assertEqual(h_emb[0].accion, "inspeccion")
+        self.assertFalse(any(c.codigo_falla == "H-EMB" for c in resultado.causas))
+        self.assertIsNotNone(resultado.orden)
+        self.assertEqual(resultado.orden.equipo, "B-103")
+        self.assertEqual(resultado.orden.tareas, ["I-VIB"])
+        self.assertEqual(resultado.problemas, ())
+        self.assertEqual(resultado.orden.estado, EstadoOrden.pendiente)
+
+    def test_inspeccion_sin_tarea_no_genera_orden(self):
+        ev = evidencia("B-101")
+        sintetica = causa("F06", None, "B-101", accion="inspeccion")
+        with patch("sistema.flujo.causas_probables", return_value=[sintetica]):
+            resultado = procesar(
+                evento_sensor("B-101"), ev, [], CatalogoTools()
+            )
+
         self.assertIsNone(resultado.orden)
         self.assertEqual(resultado.problemas, ("SIN_ORDEN",))
+
+    def test_i_val_genera_orden_y_queda_pendiente(self):
+        ev = evidencia("B-101")
+        sintetica = causa(
+            "F02", "I-VAL", "B-101", accion="I-VAL", ejecutor="propio"
+        )
+        with patch("sistema.flujo.causas_probables", return_value=[sintetica]):
+            resultado = procesar(
+                evento_sensor("B-101"),
+                ev,
+                [],
+                CatalogoTools(),
+                estado_bombas=BOMBAS_CON_RESERVA,
+            )
+
+        self.assertIsNotNone(resultado.orden)
+        self.assertEqual(resultado.orden.equipo, "B-101")
+        self.assertEqual(resultado.orden.tareas, ["I-VAL"])
+        self.assertEqual(resultado.orden.estado, EstadoOrden.pendiente)
+        self.assertIn("TAREA_NO_ESTANDAR", resultado.orden.motivo)
+        self.assertEqual(resultado.problemas, ())
 
     def test_tarea_no_estandar_generica_queda_pendiente(self):
         ev = evidencia("B-101")

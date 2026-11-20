@@ -88,6 +88,8 @@ class RepositorioOrdenes(Protocol):
 
     def cargar_pendientes(self) -> Sequence[OrdenSistema]: ...
 
+    def ordenes_abiertas(self, equipo: str) -> Sequence[OrdenSistema]: ...
+
 
 def _id_orden(equipo: str, evento_ids: Sequence[str]) -> str:
     clave = f"pia3:orden:{equipo}:{','.join(sorted(evento_ids))}"

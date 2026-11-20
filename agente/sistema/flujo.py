@@ -117,6 +117,7 @@ def procesar(
     historial: Sequence[Any],
     catalogo: CatalogoFlujo,
     estado_bombas: Mapping[str, str] | None = None,
+    fotos_pendientes_de_analisis: bool = False,
 ) -> ResultadoFlujo:
     """Encadena causas, historial, orden y reglas sin LLM ni efectos externos."""
     causas = reordenar_con_historial(
@@ -129,7 +130,7 @@ def procesar(
             causa
             for causa in causas
             if causa.genera_orden
-            and causa.accion == "orden"
+            and causa.accion in ("orden", "I-VIB", "I-VAL")
             and causa.tarea_codigo is not None
         ),
         None,
@@ -168,7 +169,7 @@ def procesar(
         stock=stock_equipo,
         estado_bombas=estado_bombas,
         dano_estructural_grave=False,
-        fotos_pendientes_de_analisis=False,
+        fotos_pendientes_de_analisis=fotos_pendientes_de_analisis,
     )
     estado, motivo = evaluar(orden, contexto)
     if estado == EstadoOrden.pendiente:

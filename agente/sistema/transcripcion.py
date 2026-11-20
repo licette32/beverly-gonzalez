@@ -1,5 +1,6 @@
 import logging
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,7 @@ class Transcriptor:
     def __init__(self) -> None:
         self._modelo: WhisperModel | None = None
         self._listo = threading.Event()
+        self._lock = threading.RLock()
 
     def precargar(self) -> None:
         log.info("cargando whisper %s int8", MODELO)
@@ -57,17 +59,26 @@ class Transcriptor:
             # Si la carga falla, el worker no debe quedar esperando para siempre.
             self._listo.set()
 
-    def transcribir(self, ruta: Path) -> str:
+    def transcribir(
+        self,
+        ruta: Path,
+        prompt: str | None = None,
+        *,
+        al_adquirir_lock: Callable[[], None] | None = None,
+    ) -> str:
         self._listo.wait()
-        if self._modelo is None:
-            raise RuntimeError("Whisper no está cargado")
-        segmentos, _ = self._modelo.transcribe(
-            str(ruta),
-            language="es",
-            beam_size=BEAM_SIZE,
-            vad_filter=False,
-            condition_on_previous_text=False,
-            word_timestamps=False,
-            initial_prompt=PROMPT,
-        )
-        return " ".join(s.text.strip() for s in segmentos).strip()
+        with self._lock:
+            if al_adquirir_lock is not None:
+                al_adquirir_lock()
+            if self._modelo is None:
+                raise RuntimeError("Whisper no está cargado")
+            segmentos, _ = self._modelo.transcribe(
+                str(ruta),
+                language="es",
+                beam_size=BEAM_SIZE,
+                vad_filter=False,
+                condition_on_previous_text=False,
+                word_timestamps=False,
+                initial_prompt=PROMPT if prompt is None else prompt,
+            )
+            return " ".join(s.text.strip() for s in segmentos).strip()

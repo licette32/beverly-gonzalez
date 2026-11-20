@@ -1,20 +1,15 @@
 import logging
 import queue
-import tempfile
 import threading
 import time
-import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturoTimeout
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urljoin
 
 from planta_contrato import NotaRecorrida, Topicos
 
+from . import audio
 from .coordinador import CoordinadorPartes
-from .config import AUDIO_INTENTOS, AUDIO_TIMEOUT_S, PLANTA_BASE_URL
 from .corte import LIMITE_TRANSCRIPCION_S, mensaje_corte
 from .mqtt import ClienteMQTT
 from .seguridad import detectar
@@ -126,53 +121,16 @@ class WorkerNotas(threading.Thread):
         except Exception:
             log.exception("no se pudo publicar el aviso de corte de %s", nota.id)
 
-    def _transcribir(self, ruta: Path) -> str:
-        try:
-            return self._transcriptor.transcribir(ruta)
-        finally:
-            ruta.unlink(missing_ok=True)
-
     def _transcribir_con_limite(self, nota: NotaRecorrida, ruta: Path) -> str | None:
         """Transcribe con tiempo maximo. Si se agota o falla, avisa a la tablet."""
-        futuro = self._transcripcion.submit(self._transcribir, ruta)
-        try:
-            return futuro.result(timeout=self._limite_transcripcion_s)
-        except FuturoTimeout:
-            if futuro.cancel():
-                ruta.unlink(missing_ok=True)
-            log.error(
-                "nota %s: la transcripción superó el límite de %.0f s; se corta",
-                nota.id,
-                self._limite_transcripcion_s,
-            )
-        except Exception as exc:
-            log.error("nota %s: falló la transcripción: %s", nota.id, exc)
-        self._avisar_corte(nota, "transcripcion")
-        return None
+        return audio.transcribir_con_limite(
+            self._transcripcion,
+            self._transcriptor,
+            ruta,
+            self._limite_transcripcion_s,
+            nota_id=nota.id,
+            avisar=lambda: self._avisar_corte(nota, "transcripcion"),
+        )
 
     def _descargar(self, nota_id: str, audio_url: str) -> Path:
-        url = urljoin(PLANTA_BASE_URL, audio_url)
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        ultimo: Exception | None = None
-        for intento in range(1, AUDIO_INTENTOS + 1):
-            try:
-                with opener.open(url, timeout=AUDIO_TIMEOUT_S) as respuesta:
-                    datos = respuesta.read()
-                archivo = tempfile.NamedTemporaryFile(
-                    prefix=f"{nota_id}-", suffix=".wav", delete=False
-                )
-                with archivo:
-                    archivo.write(datos)
-                return Path(archivo.name)
-            except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                ultimo = exc
-                log.warning(
-                    "descarga de %s falló (%s/%s): %s",
-                    url,
-                    intento,
-                    AUDIO_INTENTOS,
-                    exc,
-                )
-                if intento < AUDIO_INTENTOS:
-                    time.sleep(0.5 * intento)
-        raise RuntimeError(f"no se pudo descargar {url}") from ultimo
+        return audio.descargar_audio(nota_id, audio_url)

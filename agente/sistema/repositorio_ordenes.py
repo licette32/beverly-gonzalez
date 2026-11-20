@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import json
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 from planta_contrato import EstadoOrden, OrdenSistema
+
+from .config import POSTGRES_REINTENTO_S
+
+REINTENTOS_CONEXION = 4
+ESPERA_CONEXION_BASE_S = POSTGRES_REINTENTO_S
 
 DDL_TABLA = """
 CREATE TABLE IF NOT EXISTS ordenes (
@@ -54,6 +60,18 @@ WHERE estado IN (%s, %s)
 ORDER BY (payload->>'ts')::timestamptz, id
 """
 
+ESTADOS_ABIERTOS = (
+    EstadoOrden.pendiente,
+    EstadoOrden.aprobada,
+    EstadoOrden.ejecutada,
+    EstadoOrden.observada,
+)
+
+SQL_ABIERTAS = """
+SELECT payload FROM ordenes
+WHERE estado IN (%s, %s, %s, %s) AND payload->>'equipo' = %s
+ORDER BY (payload->>'ts')::timestamptz, id
+"""
 
 
 class ErrorPersistenciaOrden(Exception):
@@ -75,16 +93,36 @@ def _orden_desde_payload(payload: Any) -> OrdenSistema:
     return OrdenSistema.model_validate(payload)
 
 
+def _es_tabla_ordenes_inexistente(exc: Exception) -> bool:
+    textos = [str(exc), type(exc).__name__]
+    causa = exc.__cause__
+    while causa is not None:
+        textos.extend([str(causa), type(causa).__name__])
+        causa = causa.__cause__
+    texto = " ".join(textos).lower()
+    return (
+        'relation "ordenes" does not exist' in texto
+        or "undefinedtable" in texto
+    )
+
+
 class RepositorioOrdenesPostgres:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
         self._conexion: Any = None
-        self._crear_tablas()
 
     def _abrir_conexion(self) -> Any:
-        conexion = _psycopg().connect(self._dsn, connect_timeout=2)
-        self._conexion = conexion
-        return conexion
+        ultimo: Exception | None = None
+        for intento in range(1, REINTENTOS_CONEXION + 1):
+            try:
+                conexion = _psycopg().connect(self._dsn, connect_timeout=2)
+                self._conexion = conexion
+                return conexion
+            except Exception as exc:
+                ultimo = exc
+                if intento < REINTENTOS_CONEXION:
+                    time.sleep(ESPERA_CONEXION_BASE_S * 2 ** (intento - 1))
+        raise ultimo
 
     def _ejecutar(
         self,
@@ -93,33 +131,41 @@ class RepositorioOrdenesPostgres:
         params: tuple[Any, ...] | None = None,
         *,
         fetch: Callable[[Any], Any] | None = None,
+        recrear: bool = True,
     ) -> Any:
-        conexion = None
-        try:
-            conexion = self._abrir_conexion()
-            with conexion.cursor() as cursor:
-                cursor.execute(sql, params)
-                resultado = fetch(cursor) if fetch is not None else None
-            conexion.commit()
-            return resultado
-        except Exception as exc:
-            if conexion is not None:
-                try:
-                    conexion.rollback()
-                except Exception:
-                    pass
-            raise ErrorPersistenciaOrden(operacion, exc) from exc
-        finally:
-            if conexion is not None:
-                try:
-                    conexion.close()
-                except Exception:
-                    pass
+        for intento in range(2):
+            conexion = None
+            try:
+                conexion = self._abrir_conexion()
+                with conexion.cursor() as cursor:
+                    cursor.execute(sql, params)
+                    resultado = fetch(cursor) if fetch is not None else None
+                conexion.commit()
+                return resultado
+            except Exception as exc:
+                if conexion is not None:
+                    try:
+                        conexion.rollback()
+                    except Exception:
+                        pass
+                if intento == 0 and recrear and _es_tabla_ordenes_inexistente(exc):
+                    try:
+                        self._crear_tablas()
+                    except Exception:
+                        raise ErrorPersistenciaOrden(operacion, exc) from exc
+                    continue
+                raise ErrorPersistenciaOrden(operacion, exc) from exc
+            finally:
+                if conexion is not None:
+                    try:
+                        conexion.close()
+                    except Exception:
+                        pass
 
     def _crear_tablas(self) -> None:
-        self._ejecutar("crear tabla ordenes", DDL_TABLA)
+        self._ejecutar("crear tabla ordenes", DDL_TABLA, recrear=False)
         for ddl in DDL_INDICES:
-            self._ejecutar("crear índice de ordenes", ddl)
+            self._ejecutar("crear índice de ordenes", ddl, recrear=False)
 
     def guardar(self, orden: OrdenSistema) -> None:
         payload = orden.model_dump(mode="json")
@@ -170,6 +216,15 @@ class RepositorioOrdenesPostgres:
             "cargar órdenes pendientes",
             SQL_PENDIENTES,
             (EstadoOrden.pendiente.value, EstadoOrden.borrador.value),
+            fetch=lambda cursor: cursor.fetchall(),
+        )
+        return [_orden_desde_payload(fila[0]) for fila in filas]
+
+    def ordenes_abiertas(self, equipo: str) -> list[OrdenSistema]:
+        filas = self._ejecutar(
+            "cargar órdenes abiertas del equipo",
+            SQL_ABIERTAS,
+            (*(estado.value for estado in ESTADOS_ABIERTOS), equipo),
             fetch=lambda cursor: cursor.fetchall(),
         )
         return [_orden_desde_payload(fila[0]) for fila in filas]

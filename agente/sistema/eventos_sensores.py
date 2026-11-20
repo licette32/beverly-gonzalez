@@ -5,7 +5,7 @@ import queue
 import threading
 import uuid
 from datetime import datetime, timedelta
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from planta_contrato import (
     Calidad,
@@ -16,7 +16,13 @@ from planta_contrato import (
 )
 
 from .anomalias import ParametrosDeteccion, Resultado, detectar_anomalia
+from .anomalias_recientes import (
+    AlmacenAnomalias,
+    anomalia_desde_resultado,
+    equipos_relacionados,
+)
 from .catalogo import EstadoPlanta
+from .causas import EvidenciaEquipo
 from .sensores import VentanaSensores
 
 log = logging.getLogger(__name__)
@@ -117,10 +123,12 @@ class DetectorSensores:
         ventana: VentanaSensores,
         limites: Mapping[tuple[str, str], Mapping[str, float]],
         parametros: ParametrosDeteccion,
+        al_anomalia: Callable[[Resultado, datetime], None] | None = None,
     ) -> None:
         self._ventana = ventana
         self._limites = limites
         self._parametros = parametros
+        self._al_anomalia = al_anomalia
         self._activos: dict[tuple[str, str], EventoSistema] = {}
 
     def evaluar(
@@ -157,6 +165,11 @@ class DetectorSensores:
             return None
         evento = evento_desvio(resultado, evaluadas, inicio)
         self._activos[clave] = evento
+        if self._al_anomalia is not None:
+            try:
+                self._al_anomalia(resultado, inicio)
+            except Exception:
+                log.exception("falló el callback de anomalía de %s", clave)
         return evento
 
     def activo(self, tag: str, variable: str) -> EventoSistema | None:
@@ -174,12 +187,23 @@ class WorkerSensores(threading.Thread):
         limites: Mapping[tuple[str, str], Mapping[str, float]],
         parametros: ParametrosDeteccion,
         estado: EstadoPlanta | None = None,
+        almacen_anomalias: AlmacenAnomalias | None = None,
+        encolar_orden: Callable[[EventoSistema, EvidenciaEquipo, bool], None]
+        | None = None,
     ) -> None:
         super().__init__(name="sensores", daemon=True)
         self._cliente = cliente
         self._ventana = ventana
         self._limites = limites
-        self._detector = DetectorSensores(ventana, limites, parametros)
+        self._parametros = parametros
+        self._almacen_anomalias = (
+            almacen_anomalias if almacen_anomalias is not None else AlmacenAnomalias()
+        )
+        self._encolar_orden = encolar_orden
+        self._por_publicar: dict[tuple[str, str], EvidenciaEquipo] = {}
+        self._detector = DetectorSensores(
+            ventana, limites, parametros, al_anomalia=self._registrar_anomalia
+        )
         self._estado = estado if estado is not None else EstadoPlanta()
         self._cola: queue.Queue[tuple[str, str] | None] = queue.Queue()
         self._pendientes: set[tuple[str, str]] = set()
@@ -211,6 +235,24 @@ class WorkerSensores(threading.Thread):
             finally:
                 self._cola.task_done()
 
+    def _registrar_anomalia(self, resultado: Resultado, inicio: datetime) -> None:
+        self._almacen_anomalias.registrar(anomalia_desde_resultado(resultado))
+        evento = self._detector.activo(resultado.tag, resultado.variable)
+        if evento is None:
+            return
+        hasta = evento.ts
+        desde = min(
+            inicio, hasta - timedelta(minutes=self._parametros.ventana_min)
+        )
+        self._por_publicar[(resultado.tag, resultado.variable)] = EvidenciaEquipo(
+            equipo=resultado.tag,
+            desde=desde,
+            hasta=hasta,
+            anomalias=self._almacen_anomalias.recientes(
+                desde, hasta, equipos_relacionados(resultado.tag)
+            ),
+        )
+
     def _procesar(self, clave: tuple[str, str]) -> None:
         tag, variable = clave
         limites = self._limites.get(clave, {})
@@ -235,5 +277,9 @@ class WorkerSensores(threading.Thread):
         try:
             self._cliente.publicar(Topicos.EVENTOS, evento)
         except Exception:
+            self._por_publicar.pop(clave, None)
             self._detector.olvidar(tag, variable)
             raise
+        evidencia = self._por_publicar.pop(clave, None)
+        if evidencia is not None and self._encolar_orden is not None:
+            self._encolar_orden(evento, evidencia, False)

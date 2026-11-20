@@ -44,3 +44,24 @@ ejemplo:
 ```text
 docker compose exec agente python -m sistema.cli aprobar ORDEN_ID --por NOMBRE
 ```
+
+## Límites del enganche de órdenes
+
+- El deduplicador consulta `ordenes_abiertas(equipo)`: bloquean `Pendiente`,
+  `Aprobada`, `Ejecutada` y `Observada` con el mismo conjunto de tareas;
+  `Rechazada`, `Cerrada` y `Certificada` no bloquean. El mapa en memoria es una
+  caché: si Postgres vuelve a consultarse y ya no hay orden abierta, se descarta.
+- El almacén de anomalías recientes es en memoria, acotado y con lock. No
+  sobrevive a un reinicio; el historial persistente es el de órdenes.
+- Si falla `/api/estado`, `estado_bombas` queda en `None`: la reserva no está
+  confirmada y una tarea que detiene la bomba queda pendiente por
+  `REDUCE_INYECCION`. Si falla el historial, se sigue sin reordenar causas.
+- Una nota con fotos se marca `fotos_pendientes_de_analisis=True` y la orden
+  queda pendiente por `FOTOS_PENDIENTES`; no hay análisis de imágenes.
+- En `fuga-sin-enlace`, la S1 de B-101 no genera orden. La nota se detecta como
+  alerta de seguridad y se publica en `sistema/eventos` como `AlertaSeguridad`,
+  pero no se convierte en `Escalado`. La caída de descarga informada (113,6 a
+  104,7 kg/cm²) no llega a `alarma_baja=95`, así que los sensores tampoco
+  escalan. La fila `condicion_insegura` no coincide con las firmas de `FALLAS` y
+  la foto de daño estructural no se analiza: no hay tarea derivable y no se
+  inventa ninguna. No aplica `MBP-4 §17.1` porque es una sección de PIA-1.

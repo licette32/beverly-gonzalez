@@ -12,9 +12,9 @@ from __future__ import annotations
 import sys
 import time
 
-from .config import EMBEDDING_DIM, INDEXAR_PG_AL_ARRANCAR, MANUALES_TIMEOUT_S, PLANTA_BASE_URL
+from .config import INDEXAR_PG_AL_ARRANCAR, PLANTA_BASE_URL
 from .embeddings import obtener_modelo
-from .indexado import cargar_desde_archivo, Fragmento
+from .indexado import cargar_desde_api
 from .indice_pg import crear_tabla, indexar
 
 
@@ -28,18 +28,15 @@ def main() -> None:
     print(f"[{time.strftime('%H:%M:%S')}] Iniciando indexado de fragmentos...")
 
     try:
-        fragmentos = cargar_desde_archivo(
-            r"C:\Users\bever\Desktop\novit-curso\academia2026-tp\datos\documentos\fragmentos.jsonl",
-            r"C:\Users\bever\Desktop\novit-curso\academia2026-tp\datos\documentos\indice.json",
-        )
+        fragmentos = cargar_desde_api(PLANTA_BASE_URL)
         print(f"[{time.strftime('%H:%M:%S')}] Fragmentos cargados: {len(fragmentos)}")
 
         modelo = obtener_modelo([f.texto for f in fragmentos])
         crear_tabla()
-        indexar(fragmentos, modelo)
+        total = indexar(fragmentos, modelo)
         elapsed = time.time() - t0
         print(f"[{time.strftime('%H:%M:%S')}] Indexado completado en {elapsed:.1f} s")
-        print(f"[{time.strftime('%H:%M:%S')}] Fragmentos con embedding: 701")
+        print(f"[{time.strftime('%H:%M:%S')}] Fragmentos con embedding: {total}")
     except Exception as exc:
         print(f"[{time.strftime('%H:%M:%S')}] Error durante el indexado: {exc}")
         sys.exit(1)

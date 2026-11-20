@@ -7,8 +7,9 @@ import time
 from planta_contrato import Topicos
 
 from .anomalias import ParametrosDeteccion
+from .anomalias_recientes import AlmacenAnomalias
 from .catalogo import CatalogoPlanta
-from .cierres import ManejadorCierres
+from .cierres import ManejadorCierres, WorkerCierres
 from .config import (
     HEARTBEAT_S,
     INDEXAR_PG_AL_ARRANCAR,
@@ -28,7 +29,9 @@ from .coordinador import CoordinadorPartes
 from .eventos_sensores import WorkerSensores
 from .heartbeat import Latido
 from .mqtt import ClienteMQTT
+from .ordenes_worker import WorkerOrdenes
 from .repositorio import crear_repositorio
+from .repositorio_cierres import RepositorioCierresPostgres
 from .repositorio_ordenes import RepositorioOrdenesPostgres
 from .sensores import VentanaSensores
 from .transcripcion import Transcriptor
@@ -74,12 +77,38 @@ def main() -> None:
     repositorio_ordenes = (
         RepositorioOrdenesPostgres(POSTGRES_DSN) if POSTGRES_DSN else None
     )
+    repositorio_cierres = (
+        RepositorioCierresPostgres(POSTGRES_DSN) if POSTGRES_DSN else None
+    )
+    almacen_anomalias = AlmacenAnomalias()
+    worker_ordenes = (
+        WorkerOrdenes(cliente.publicar, repositorio_ordenes)
+        if repositorio_ordenes is not None
+        else None
+    )
+    worker_cierres = (
+        WorkerCierres(repositorio_cierres, repositorio_ordenes, transcriptor)
+        if repositorio_cierres is not None and repositorio_ordenes is not None
+        else None
+    )
+    encolar_orden = worker_ordenes.encolar if worker_ordenes is not None else None
+    if worker_ordenes is None:
+        logging.getLogger(__name__).warning(
+            "sin repositorio de órdenes: no se generan órdenes automáticas"
+        )
+    cierres_worker_no_arranco = False
+    if worker_cierres is None:
+        logging.getLogger(__name__).warning(
+            "sin repositorio de cierres: los cierres no se procesan"
+        )
     catalogo = CatalogoPlanta()
     coordinador = CoordinadorPartes(
         cliente,
         repositorio,
         catalogo,
         repositorio_ordenes=repositorio_ordenes,
+        almacen_anomalias=almacen_anomalias,
+        encolar_orden=encolar_orden,
     )
     worker = WorkerNotas(cliente, transcriptor, coordinador)
     ventana_sensores = VentanaSensores(
@@ -94,23 +123,40 @@ def main() -> None:
             SENSORES_ANOMALIA_MINIMO,
             SENSORES_ANOMALIA_SPAN_MIN,
         ),
+        almacen_anomalias=almacen_anomalias,
+        encolar_orden=encolar_orden,
     )
     cliente.al_recibir_nota = worker.encolar
     cliente.al_recibir_respuesta = coordinador.encolar_respuesta
     cliente.al_recibir_sensor = worker_sensores.encolar
-    if repositorio_ordenes is not None:
-        cliente.al_recibir_cierre = ManejadorCierres(
-            repositorio_ordenes, cliente.publicar
-        )
-    else:
-        logging.getLogger(__name__).warning(
-            "sin repositorio de órdenes: los cierres no se procesan"
-        )
 
     # Primero se reciben y descargan las notas y el latido queda vivo; la
     # transcripción espera a que el modelo esté listo. Así no se pierde una nota
     # si la carga tarda. Postgres se conecta después, en segundo plano.
     cliente.conectar()
+    if worker_ordenes is not None:
+        worker_ordenes.start()
+    if worker_cierres is not None:
+        try:
+            worker_cierres.start()
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "No se pudo iniciar el worker de cierres: %s", exc
+            )
+            worker_cierres.detener()
+            worker_cierres = None
+            cierres_worker_no_arranco = True
+        else:
+            cliente.al_recibir_cierre = ManejadorCierres(
+                repositorio_ordenes,
+                cliente.publicar,
+                repositorio_cierres,
+                worker_cierres.encolar,
+            )
+    if cierres_worker_no_arranco:
+        logging.getLogger(__name__).warning(
+            "los cierres no se procesan porque el worker no arrancó"
+        )
     worker.start()
     worker_sensores.start()
     coordinador.iniciar()
@@ -142,6 +188,12 @@ def main() -> None:
         repositorio.detener()
         worker.detener()
         worker.join(timeout=35)
+        if worker_ordenes is not None:
+            worker_ordenes.detener()
+            worker_ordenes.join(timeout=2)
+        if worker_cierres is not None:
+            worker_cierres.detener()
+            worker_cierres.join(timeout=2)
         cliente.cerrar()
 
 

@@ -3,16 +3,25 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Callable
 
 from planta_contrato import (
     EstadoOrden,
+    EventoSistema,
     NotaRecorrida,
     RespuestaOperador,
+    TipoEvento,
     Topicos,
 )
 
 from .alertas import eventos_seguridad, mensaje_seguridad
+from .anomalias_recientes import (
+    AlmacenAnomalias,
+    anomalia_desde_item,
+    equipos_relacionados,
+)
+from .causas import EvidenciaEquipo
 from .ambiguedades import (
     Ambiguedad,
     detectar,
@@ -21,7 +30,7 @@ from .ambiguedades import (
 )
 from .borradores import borrador, items_seguridad, pregunta
 from .catalogo import CatalogoPlanta, historian_rango
-from .config import PREGUNTA_TIMEOUT_S
+from .config import PREGUNTA_TIMEOUT_S, SENSORES_ANOMALIA_VENTANA_MIN
 from .corte import MAX_CORRECCIONES, mensaje_corte
 from .eventos import eventos_parte
 from .interpretacion import interpretar
@@ -42,12 +51,19 @@ class CoordinadorPartes:
         catalogo: CatalogoPlanta,
         timeout_pregunta_s: float = PREGUNTA_TIMEOUT_S,
         repositorio_ordenes: RepositorioOrdenes | None = None,
+        almacen_anomalias: AlmacenAnomalias | None = None,
+        encolar_orden: Callable[[EventoSistema, EvidenciaEquipo, bool], None]
+        | None = None,
     ) -> None:
         self._cliente = cliente
         self._repositorio = repositorio
         self._catalogo = catalogo
         self._timeout_pregunta_s = timeout_pregunta_s
         self._repositorio_ordenes = repositorio_ordenes
+        self._almacen_anomalias = (
+            almacen_anomalias if almacen_anomalias is not None else AlmacenAnomalias()
+        )
+        self._encolar_orden = encolar_orden
         self._cola: queue.Queue[RespuestaOperador | None] = queue.Queue()
         self._detener = threading.Event()
         self._hilo: threading.Thread | None = None
@@ -91,6 +107,36 @@ class CoordinadorPartes:
             n_pendientes,
             n_borradores,
         )
+
+    def _publicar_eventos_parte(
+        self, nota: NotaRecorrida, items: list[ItemParte]
+    ) -> None:
+        for item in items:
+            self._almacen_anomalias.registrar(anomalia_desde_item(item, nota.ts))
+        for evento in eventos_parte(nota, items):
+            self._cliente.publicar(Topicos.EVENTOS, evento)
+            if evento.tipo is TipoEvento.escalado:
+                self._encolar_evento_parte(evento, items, nota)
+
+    def _encolar_evento_parte(
+        self, evento: EventoSistema, items: list[ItemParte], nota: NotaRecorrida
+    ) -> None:
+        if self._encolar_orden is None:
+            return
+        equipo = evento.equipo or ""
+        relacionados = equipos_relacionados(equipo)
+        hasta = nota.ts
+        desde = hasta - timedelta(minutes=SENSORES_ANOMALIA_VENTANA_MIN)
+        evidencia = EvidenciaEquipo(
+            equipo=equipo,
+            desde=desde,
+            hasta=hasta,
+            anomalias=self._almacen_anomalias.recientes(
+                desde, hasta, relacionados
+            ),
+            partes=tuple(item for item in items if item.tag in relacionados),
+        )
+        self._encolar_orden(evento, evidencia, bool(nota.fotos))
 
     def iniciar(self) -> None:
         if self._hilo is not None:
@@ -159,8 +205,7 @@ class CoordinadorPartes:
             self._publicar_pregunta(nota, texto, items, ambiguedades, 0, 1)
             return
 
-        for evento in eventos_parte(nota, items):
-            self._cliente.publicar(Topicos.EVENTOS, evento)
+        self._publicar_eventos_parte(nota, items)
         mensaje = borrador(nota, items, 0)
         estado = EstadoNota(
             nota_id=nota.id,
@@ -237,8 +282,7 @@ class CoordinadorPartes:
         )
 
     def _publicar_borrador_resuelto(self, estado: EstadoNota) -> None:
-        for evento in eventos_parte(estado.nota, estado.items):
-            self._cliente.publicar(Topicos.EVENTOS, evento)
+        self._publicar_eventos_parte(estado.nota, estado.items)
         mensaje = borrador(estado.nota, estado.items, estado.intento)
         estado.mensaje = mensaje
         estado.borrador = mensaje.pantalla.filas if mensaje.pantalla else []
@@ -276,8 +320,9 @@ class CoordinadorPartes:
         ):
             return
         ambiguedades = detectar(estado.items, estado.texto, self._catalogo)
-        for evento in eventos_parte(estado.nota, items_para_b1(estado.items, ambiguedades)):
-            self._cliente.publicar(Topicos.EVENTOS, evento)
+        self._publicar_eventos_parte(
+            estado.nota, items_para_b1(estado.items, ambiguedades)
+        )
         visibles = items_para_pantalla(estado.items, ambiguedades, timeout=True)
         mensaje = borrador(
             estado.nota,

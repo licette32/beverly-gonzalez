@@ -54,6 +54,9 @@ class RepositorioOrdenesFalso:
     def cargar_pendientes(self):
         return []
 
+    def ordenes_abiertas(self, equipo):
+        return []
+
 
 class ClienteFalso:
     def __init__(self) -> None:

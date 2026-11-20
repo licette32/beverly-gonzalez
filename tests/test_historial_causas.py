@@ -19,6 +19,16 @@ from sistema.historial_causas import (
     reordenar_con_historial,
 )
 
+_patch_citas = patch("sistema.causas.verificar_cita", return_value=True)
+
+
+def setUpModule():
+    _patch_citas.start()
+
+
+def tearDownModule():
+    _patch_citas.stop()
+
 TZ = timezone(timedelta(hours=-3))
 DESDE = datetime(2026, 11, 4, 6, 0, tzinfo=TZ)
 HASTA = datetime(2026, 11, 4, 7, 0, tzinfo=TZ)
@@ -94,6 +104,36 @@ def causa_f09_en_filtro() -> Causa:
     )
 
 
+def causa_h_emb() -> Causa:
+    return Causa(
+        codigo_falla="H-EMB",
+        descripcion="H-EMB Repetición de empaquetadura/émbolo",
+        evidencia=(),
+        faltantes=(),
+        tarea_codigo=None,
+        equipo_orden="B-103",
+        citas=(),
+        accion="inspeccion",
+        genera_orden=False,
+        ejecutor="propio",
+    )
+
+
+def causa_h_ret() -> Causa:
+    return Causa(
+        codigo_falla="H-RET",
+        descripcion="H-RET Repetición de reten",
+        evidencia=(),
+        faltantes=(),
+        tarea_codigo=None,
+        equipo_orden="B-102",
+        citas=(),
+        accion="inspeccion",
+        genera_orden=False,
+        ejecutor="propio",
+    )
+
+
 class TestAcople(unittest.TestCase):
     def test_confirma_acople_y_ordena_f06(self):
         historial = [
@@ -148,9 +188,51 @@ class TestAcople(unittest.TestCase):
         self.assertEqual(resultado[0].accion, "I-VIB")
         self.assertEqual(resultado[0].tarea_codigo, "I-VIB")
 
+    def test_f03_con_temperatura_y_valvula_previa_queda_primera(self):
+        historial = [orden("H1", "2026-09-08T09:00:00-03:00", "B-101", ["T-B-VAL"])]
+        ev = evidencia(
+            "B-101",
+            [
+                anomalia("B-101", "vibracion", "alta"),
+                anomalia("B-101", "temperatura_aceite", "alta"),
+            ],
+        )
+        with patch("sistema.causas.verificar_cita", return_value=True):
+            base = causas_probables(ev)
+            resultado = reordenar_con_historial(base, historial, ev)
+        self.assertEqual(resultado[0].codigo_falla, "F03")
+        self.assertEqual(resultado[0].tarea_codigo, "T-B-ROD")
+        self.assertNotIn("H1", resultado[0].antecedentes)
+
+    def test_acople_no_promueve_f06_con_temperatura(self):
+        historial = [
+            orden("H1", "2026-09-08T09:00:00-03:00", "B-101", ["T-B-VAL"]),
+            orden(
+                "H2",
+                "2026-08-12T09:00:00-03:00",
+                "B-101",
+                ["I-VIB"],
+                estado="Certificada",
+                texto="b1 axial en 1x subiendo, vigilar acople desalineado",
+            ),
+        ]
+        ev = evidencia(
+            "B-101",
+            [
+                anomalia("B-101", "vibracion", "alta"),
+                anomalia("B-101", "temperatura_aceite", "alta"),
+            ],
+        )
+        with patch("sistema.causas.verificar_cita", return_value=True):
+            resultado = reordenar_con_historial(causas_probables(ev), historial, ev)
+        primera = resultado[0]
+        self.assertEqual(primera.codigo_falla, "F03")
+        self.assertNotEqual(primera.codigo_falla, "F06")
+        self.assertNotEqual(primera.tarea_codigo, "T-B-ALI")
+
 
 class TestEmbolo(unittest.TestCase):
-    def test_inserta_h_emb_con_inspeccion(self):
+    def test_no_inserta_h_emb_sin_firma_actual(self):
         historial = [
             orden(
                 "E1",
@@ -161,12 +243,35 @@ class TestEmbolo(unittest.TestCase):
             )
         ]
         resultado = reordenar_con_historial([], historial, evidencia("B-103"))
-        self.assertEqual(resultado[0].codigo_falla, "H-EMB")
-        self.assertEqual(resultado[0].accion, "inspeccion")
-        self.assertIsNone(resultado[0].tarea_codigo)
-        self.assertEqual(resultado[0].citas, ())
-        self.assertEqual(resultado[0].antecedentes, ("E1",))
+        self.assertEqual(resultado, [])
         self.assertEqual(TABLA_HISTORIAL["H-EMB"]["accion"], "inspeccion")
+
+    def test_h_emb_existente_exige_goteo_actual(self):
+        historial = [
+            orden(
+                "E1",
+                "2026-08-04T15:50:00-03:00",
+                "B-103",
+                ["T-B-EMP"],
+                texto="embolo 3 rayado, pedir tx-emb-57c",
+            )
+        ]
+        sin_firma = reordenar_con_historial(
+            [causa_h_emb()], historial, evidencia("B-103")
+        )
+        self.assertEqual(sin_firma, [])
+        con_firma = reordenar_con_historial(
+            [causa_h_emb()],
+            historial,
+            evidencia(
+                "B-103",
+                [anomalia("B-103", "goteo_empaquetadura", "alta")],
+            ),
+        )
+        self.assertEqual(con_firma[0].codigo_falla, "H-EMB")
+        self.assertEqual(con_firma[0].accion, "inspeccion")
+        self.assertIsNone(con_firma[0].tarea_codigo)
+        self.assertEqual(con_firma[0].antecedentes, ("E1",))
 
     def test_embolo_resuelto_no_reordena(self):
         historial = [
@@ -190,7 +295,7 @@ class TestEmbolo(unittest.TestCase):
 
 
 class TestReten(unittest.TestCase):
-    def test_inserta_h_ret_con_inspeccion(self):
+    def test_no_inserta_h_ret_sin_firma_actual(self):
         historial = [
             orden(
                 "A1",
@@ -208,12 +313,39 @@ class TestReten(unittest.TestCase):
             ),
         ]
         resultado = reordenar_con_historial([], historial, evidencia("B-102"))
-        self.assertEqual(resultado[0].codigo_falla, "H-RET")
-        self.assertEqual(resultado[0].accion, "inspeccion")
-        self.assertIsNone(resultado[0].tarea_codigo)
-        self.assertEqual(resultado[0].citas, ())
-        self.assertEqual(resultado[0].antecedentes, ("A1", "A2"))
+        self.assertEqual(resultado, [])
         self.assertEqual(TABLA_HISTORIAL["H-RET"]["accion"], "inspeccion")
+
+    def test_h_ret_existente_exige_aceite_bajo_actual(self):
+        historial = [
+            orden(
+                "A1",
+                "2025-10-28T09:00:00-03:00",
+                "B-102",
+                ["T-B-ACE"],
+                texto="aceite bajo otra vez",
+            ),
+            orden(
+                "A2",
+                "2025-11-18T09:00:00-03:00",
+                "B-102",
+                ["T-B-ACE"],
+                texto="otra vez en 3 semanas, pedir reten",
+            ),
+        ]
+        sin_firma = reordenar_con_historial(
+            [causa_h_ret()], historial, evidencia("B-102")
+        )
+        self.assertEqual(sin_firma, [])
+        con_firma = reordenar_con_historial(
+            [causa_h_ret()],
+            historial,
+            evidencia("B-102", [anomalia("B-102", "nivel_aceite_visor", "baja")]),
+        )
+        self.assertEqual(con_firma[0].codigo_falla, "H-RET")
+        self.assertEqual(con_firma[0].accion, "inspeccion")
+        self.assertIsNone(con_firma[0].tarea_codigo)
+        self.assertEqual(con_firma[0].antecedentes, ("A1", "A2"))
 
     def test_reten_resuelto_no_reordena(self):
         historial = [
@@ -250,7 +382,7 @@ class TestFiltros(unittest.TestCase):
         self.assertEqual(resultado[0].equipo_orden, "F-201B")
         self.assertEqual(resultado[0].antecedentes, ("C1",))
 
-    def test_cavitacion_raiz_filtro_nunca_en_bomba(self):
+    def test_cavitacion_sin_dp_no_se_mueve_a_filtro(self):
         historial = [
             orden(
                 "V1",
@@ -267,12 +399,59 @@ class TestFiltros(unittest.TestCase):
                 anomalia("B-102", "vibracion", "alta"),
             ],
         )
-        base = causas_probables(ev)
         with patch("sistema.causas.verificar_cita", return_value=True):
+            base = causas_probables(ev)
             resultado = reordenar_con_historial(base, historial, ev)
-        self.assertEqual(resultado[0].codigo_falla, "F09")
+        f09 = next(causa for causa in resultado if causa.codigo_falla == "F09")
+        self.assertNotIn(f09.equipo_orden, FILTROS)
+        self.assertNotEqual(f09.tarea_codigo, "T-F-CAR")
+
+    def test_cavitacion_con_dp_en_filtro_va_a_filtro(self):
+        historial = [
+            orden(
+                "V1",
+                "2026-04-15T14:30:00-03:00",
+                "F-201A",
+                ["T-F-CAR"],
+                texto="b2 cavita ruido piedras succion 0,9 no tocar la bomba es el fa de nuevo",
+            )
+        ]
+        ev = evidencia(
+            "B-102",
+            [
+                anomalia("B-102", "presion_succion", "baja"),
+                anomalia("B-102", "vibracion", "alta"),
+                anomalia("F-201A", "presion_diferencial", "alta"),
+            ],
+        )
+        with patch("sistema.causas.verificar_cita", return_value=True):
+            base = causas_probables(ev)
+            resultado = reordenar_con_historial(base, historial, ev)
+        f09 = next(causa for causa in resultado if causa.codigo_falla == "F09")
+        self.assertNotIn(f09.equipo_orden, BOMBAS)
+        self.assertEqual(f09.equipo_orden, "F-201A")
+        self.assertEqual(f09.tarea_codigo, "T-F-CAR")
+
+    def test_f201a_solo_dp_alta_devuelve_solo_f07(self):
+        historial = [
+            orden(
+                "C1",
+                "2026-03-20T15:30:00-03:00",
+                "F-201A",
+                ["T-F-CAR"],
+                texto="cambio de cartucho, ruido de piedras en la succion",
+            )
+        ]
+        ev = evidencia("F-201A", [anomalia("F-201A", "presion_diferencial", "alta")])
+        citas_f07 = {("MBP-4", "6.9")}
+        with patch(
+            "sistema.causas.verificar_cita",
+            side_effect=lambda doc, seccion: (doc, seccion) in citas_f07,
+        ):
+            base = causas_probables(ev)
+            resultado = reordenar_con_historial(base, historial, ev)
+        self.assertEqual([c.codigo_falla for c in resultado], ["F07"])
         self.assertEqual(resultado[0].equipo_orden, "F-201A")
-        self.assertNotIn(resultado[0].equipo_orden, BOMBAS)
         self.assertEqual(resultado[0].tarea_codigo, "T-F-CAR")
 
     def test_dos_bombas_usa_historial_simulado(self):
@@ -282,7 +461,8 @@ class TestFiltros(unittest.TestCase):
         ]
         ev = evidencia("F-201B", [anomalia("F-201B", "presion_diferencial", "baja")])
         with patch("sistema.causas.verificar_cita", return_value=True):
-            resultado = reordenar_con_historial([], historial, ev)
+            base = causas_probables(ev)
+            resultado = reordenar_con_historial(base, historial, ev)
         self.assertEqual(resultado[0].codigo_falla, "F08")
         self.assertEqual(resultado[0].equipo_orden, "F-201B")
         self.assertEqual(resultado[0].antecedentes, ("B1", "B2"))
@@ -295,7 +475,8 @@ class TestFiltros(unittest.TestCase):
         ]
         ev = evidencia("F-201B", [anomalia("F-201B", "presion_diferencial", "baja")])
         with patch("sistema.causas.verificar_cita", return_value=True):
-            resultado = reordenar_con_historial([], historial, ev)
+            base = causas_probables(ev)
+            resultado = reordenar_con_historial(base, historial, ev)
         self.assertEqual(resultado[0].codigo_falla, "F08")
         self.assertEqual(resultado[0].antecedentes, ("V1", "V2"))
 
@@ -318,7 +499,8 @@ class TestFiltros(unittest.TestCase):
         ]
         ev = evidencia("F-201B", [anomalia("F-201B", "presion_diferencial", "baja")])
         with patch("sistema.causas.verificar_cita", return_value=True):
-            resultado = reordenar_con_historial([], historial, ev)
+            base = causas_probables(ev)
+            resultado = reordenar_con_historial(base, historial, ev)
         self.assertEqual(resultado[0].codigo_falla, "F08")
         self.assertEqual(resultado[0].antecedentes, ("C1",))
 

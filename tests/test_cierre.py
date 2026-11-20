@@ -61,6 +61,9 @@ class RepositorioCierresFalso:
     def cargar_pendientes(self) -> list[OrdenSistema]:
         return []
 
+    def ordenes_abiertas(self, equipo: str) -> list[OrdenSistema]:
+        return []
+
 
 class PublicadorFalso:
     def __init__(self) -> None:

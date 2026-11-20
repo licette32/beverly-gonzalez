@@ -377,33 +377,6 @@ def _filtro_por_texto(repeticion: Repeticion) -> str | None:
     return "F-201A" if menciona_fa else "F-201B"
 
 
-def _causa_nueva(
-    codigo: str,
-    descripcion: str,
-    repeticion: Repeticion,
-    equipo_orden: str,
-    *,
-    tarea_codigo: str | None,
-    citas: tuple[str, ...],
-    accion: str,
-    ejecutor: str,
-    genera_orden: bool = True,
-) -> Causa:
-    return Causa(
-        codigo_falla=codigo,
-        descripcion=descripcion,
-        evidencia=("historial_repetido",),
-        faltantes=(),
-        tarea_codigo=tarea_codigo,
-        equipo_orden=equipo_orden,
-        citas=citas,
-        accion=accion,
-        genera_orden=genera_orden,
-        ejecutor=ejecutor,
-        antecedentes=_ids(repeticion),
-    )
-
-
 def _con_antecedentes(causa: Causa, repeticion: Repeticion) -> Causa:
     return replace(causa, antecedentes=_ids(repeticion))
 
@@ -415,75 +388,86 @@ def _priorizar(resultado: list[Causa], codigos: Sequence[str]) -> list[Causa]:
     return adelante + resto
 
 
-def _insertar_o_actualizar(
-    resultado: list[Causa], nueva: Causa, repeticion: Repeticion
+def _ajustar(
+    resultado: list[Causa], codigo: str, repeticion: Repeticion, **cambios: Any
 ) -> list[Causa]:
-    for i, causa in enumerate(resultado):
-        if causa.codigo_falla == nueva.codigo_falla:
-            resultado[i] = _con_antecedentes(causa, repeticion)
-            return _priorizar(resultado, (nueva.codigo_falla,))
-    return [nueva, *resultado]
+    ajustado: list[Causa] = []
+    encontrada = False
+    for causa in resultado:
+        if causa.codigo_falla == codigo:
+            encontrada = True
+            causa = replace(_con_antecedentes(causa, repeticion), **cambios)
+        ajustado.append(causa)
+    return _priorizar(ajustado, (codigo,)) if encontrada else resultado
+
+
+def _vibracion_sin_desempate(evidencia: EvidenciaEquipo) -> bool:
+    equipo = evidencia.equipo
+    return (
+        evidencia.activa(equipo, "vibracion", "alta")
+        and not evidencia.activa(equipo, "temperatura_aceite", "alta")
+        and not evidencia.activa(equipo, "presion_succion", "baja")
+        and not evidencia.firma_recorrida("aguja_manometro_oscila", equipo)
+    )
+
+
+def _goteo_actual(evidencia: EvidenciaEquipo) -> bool:
+    equipo = evidencia.equipo
+    return equipo in BOMBAS and (
+        evidencia.firma_recorrida("goteo_prensaestopas_crece", equipo)
+        or evidencia.activa(equipo, "goteo_empaquetadura", "alta")
+    )
+
+
+def _aceite_bajo_actual(evidencia: EvidenciaEquipo) -> bool:
+    equipo = evidencia.equipo
+    return equipo in BOMBAS and (
+        evidencia.firma_recorrida("visor_aceite_bajo", equipo)
+        or evidencia.activa(equipo, "nivel_aceite_visor", "baja")
+    )
+
+
+def _filtro_con_dp(evidencia: EvidenciaEquipo, codigo: str) -> str | None:
+    return _primer_filtro(evidencia, "baja" if codigo == "F08" else "alta")
+
+
+def _sin_firma_historial(
+    resultado: list[Causa], evidencia: EvidenciaEquipo
+) -> list[Causa]:
+    descartar = set()
+    if not _goteo_actual(evidencia):
+        descartar.add("H-EMB")
+    if not _aceite_bajo_actual(evidencia):
+        descartar.add("H-RET")
+    return [causa for causa in resultado if causa.codigo_falla not in descartar]
 
 
 def _aplicar_acople(
     resultado: list[Causa], repeticion: Repeticion, evidencia: EvidenciaEquipo
 ) -> list[Causa]:
+    if not _vibracion_sin_desempate(evidencia):
+        return resultado
     confirmado = any(
         _parecido(antecedente.texto, ("acople", "desalinea", "alinea"))
         for antecedente in repeticion.antecedentes
     )
-    citas = _citas("F06")
     if not confirmado:
-        actualizado = [
-            replace(
-                causa,
-                accion="I-VIB",
-                tarea_codigo="I-VIB",
-                ejecutor="contratista",
-                antecedentes=_ids(repeticion),
-            )
-            if causa.codigo_falla == "F06"
-            else causa
-            for causa in resultado
-        ]
-        if any(causa.codigo_falla == "F06" for causa in actualizado):
-            return _priorizar(actualizado, ("F06",))
-        return [
-            _causa_nueva(
-                "F06",
-                "F06 Acople desalineado / elastómero gastado",
-                repeticion,
-                evidencia.equipo,
-                tarea_codigo="I-VIB",
-                citas=citas,
-                accion="I-VIB",
-                ejecutor="contratista",
-            ),
-            *resultado,
-        ]
-    for i, causa in enumerate(resultado):
-        if causa.codigo_falla == "F06":
-            resultado[i] = replace(
-                causa,
-                accion="orden",
-                tarea_codigo="T-B-ALI",
-                ejecutor="contratista (Servipat)",
-                antecedentes=_ids(repeticion),
-            )
-            return _priorizar(resultado, ("F06",))
-    return [
-        _causa_nueva(
+        return _ajustar(
+            resultado,
             "F06",
-            "F06 Acople desalineado / elastómero gastado",
             repeticion,
-            evidencia.equipo,
-            tarea_codigo="T-B-ALI",
-            citas=citas,
-            accion="orden" if citas else "inspeccion",
-            ejecutor="contratista (Servipat)",
-        ),
-        *resultado,
-    ]
+            accion="I-VIB",
+            tarea_codigo="I-VIB",
+            ejecutor="contratista",
+        )
+    return _ajustar(
+        resultado,
+        "F06",
+        repeticion,
+        accion="orden",
+        tarea_codigo="T-B-ALI",
+        ejecutor="contratista (Servipat)",
+    )
 
 
 def _aplicar_filtro(
@@ -492,60 +476,35 @@ def _aplicar_filtro(
     evidencia: EvidenciaEquipo,
     codigo: str,
 ) -> list[Causa]:
-    if codigo == "F09":
-        raiz = (
-            _filtro_de_evidencia(evidencia)
-            or _filtro_por_texto(repeticion)
-            or (repeticion.equipo_raiz if repeticion.equipo_raiz in FILTROS else TANQUE)
-        )
-        tarea = "T-F-CAR" if raiz in FILTROS else None
-    else:
-        raiz = (
-            _filtro_de_evidencia(evidencia)
-            or _filtro_por_texto(repeticion)
-            or (repeticion.equipo_raiz if repeticion.equipo_raiz in FILTROS else FILTROS[0])
-        )
-        tarea = "T-F-CAR"
+    raiz = _filtro_con_dp(evidencia, codigo)
+    if raiz is None:
+        return resultado
     citas = _citas(codigo)
-    for i, causa in enumerate(resultado):
-        if causa.codigo_falla == codigo:
-            resultado[i] = replace(
-                _con_antecedentes(causa, repeticion),
-                equipo_orden=raiz,
-                tarea_codigo=tarea if citas else None,
-                accion="orden" if citas else "inspeccion",
-            )
-            return _priorizar(resultado, (codigo,))
-    return [
-        _causa_nueva(
-            codigo,
-            f"{codigo} {repeticion.clave.replace('-', ' ')}",
-            repeticion,
-            raiz,
-            tarea_codigo=tarea if citas else None,
-            citas=citas,
-            accion="orden" if citas else "inspeccion",
-            ejecutor="propio",
-        ),
-        *resultado,
-    ]
+    return _ajustar(
+        resultado,
+        codigo,
+        repeticion,
+        equipo_orden=raiz,
+        tarea_codigo="T-F-CAR" if citas else None,
+        accion="orden" if citas else "inspeccion",
+    )
 
 
 def _sin_tarea_en_bomba(resultado: list[Causa], evidencia: EvidenciaEquipo) -> list[Causa]:
+    raiz = _primer_filtro(evidencia, "alta")
+    if raiz is None:
+        return resultado
     arreglado: list[Causa] = []
     for causa in resultado:
         if causa.codigo_falla == "F09" and (
             causa.equipo_orden in BOMBAS
             or causa.tarea_codigo in {"T-B-EMP", "T-B-VAL", "T-B-ACE", "T-B-COR", "T-B-ALI", "T-B-ROD"}
         ):
-            raiz = _filtro_de_evidencia(evidencia) or (
-                causa.equipo_orden if causa.equipo_orden in FILTROS else TANQUE
-            )
             causa = replace(
                 causa,
                 equipo_orden=raiz,
-                tarea_codigo="T-F-CAR" if causa.accion == "orden" and raiz in FILTROS else None,
-                accion="orden" if causa.accion == "orden" and raiz in FILTROS else "inspeccion",
+                tarea_codigo="T-F-CAR" if causa.accion == "orden" else None,
+                accion=causa.accion if causa.accion == "orden" else "inspeccion",
             )
         arreglado.append(causa)
     return arreglado
@@ -556,10 +515,11 @@ def reordenar_con_historial(
     historial: Sequence[Any],
     evidencia: EvidenciaEquipo,
 ) -> list[Causa]:
-    """Reordena e inserta causas a partir del historial de órdenes.
+    """Reordena o ajusta causas existentes según el historial de órdenes.
 
-    Ante historial vacío, inválido o sin antecedentes dentro de la ventana,
-    devuelve exactamente las mismas causas. Nunca falla por datos del historial.
+    Nunca inserta causas nuevas: solo trabaja sobre ``causas`` cuando la
+    evidencia actual sostiene la firma de cada patrón. Ante historial vacío,
+    inválido o sin antecedentes dentro de la ventana, devuelve las mismas causas.
     """
     base = list(causas)
     try:
@@ -589,40 +549,18 @@ def reordenar_con_historial(
             continue
         if repeticion.clave == "acople":
             resultado = _aplicar_acople(resultado, repeticion, evidencia)
-        elif repeticion.clave == "embolo":
-            tabla = TABLA_HISTORIAL["H-EMB"]
-            resultado = _insertar_o_actualizar(
-                resultado,
-                _causa_nueva(
-                    "H-EMB",
-                    tabla["descripcion"],
-                    repeticion,
-                    evidencia.equipo,
-                    tarea_codigo=tabla["tarea"],
-                    citas=(),
-                    accion=tabla["accion"],
-                    ejecutor=tabla["ejecutor"],
-                ),
-                repeticion,
-            )
-        elif repeticion.clave == "reten":
-            tabla = TABLA_HISTORIAL["H-RET"]
-            resultado = _insertar_o_actualizar(
-                resultado,
-                _causa_nueva(
-                    "H-RET",
-                    tabla["descripcion"],
-                    repeticion,
-                    evidencia.equipo,
-                    tarea_codigo=tabla["tarea"],
-                    citas=(),
-                    accion=tabla["accion"],
-                    ejecutor=tabla["ejecutor"],
-                ),
-                repeticion,
-            )
+        elif repeticion.clave == "embolo" and _goteo_actual(evidencia):
+            codigo = "H-EMB" if any(
+                causa.codigo_falla == "H-EMB" for causa in resultado
+            ) else "F01"
+            resultado = _ajustar(resultado, codigo, repeticion)
+        elif repeticion.clave == "reten" and _aceite_bajo_actual(evidencia):
+            codigo = "H-RET" if any(
+                causa.codigo_falla == "H-RET" for causa in resultado
+            ) else "F04"
+            resultado = _ajustar(resultado, codigo, repeticion)
         elif repeticion.clave in ("cartucho-roto", "valvulas-dos-bombas"):
             resultado = _aplicar_filtro(resultado, repeticion, evidencia, "F08")
         elif repeticion.clave == "cavitacion":
             resultado = _aplicar_filtro(resultado, repeticion, evidencia, "F09")
-    return _sin_tarea_en_bomba(resultado, evidencia)
+    return _sin_firma_historial(_sin_tarea_en_bomba(resultado, evidencia), evidencia)

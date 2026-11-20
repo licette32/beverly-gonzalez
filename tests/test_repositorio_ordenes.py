@@ -1,12 +1,14 @@
 import unittest
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 from planta_contrato import EstadoOrden, OrdenSistema, Repuesto
 
 from sistema.config import POSTGRES_DSN
 from sistema.repositorio_ordenes import (
+    ESPERA_CONEXION_BASE_S,
+    REINTENTOS_CONEXION,
     ErrorPersistenciaOrden,
     RepositorioOrdenesPostgres,
 )
@@ -61,6 +63,7 @@ def _limpiar(repositorio, ids) -> None:
         _ejecutar(repositorio, "DELETE FROM ordenes WHERE id = %s", (orden_id,))
 
 
+@unittest.skipUnless(POSTGRES_DSN, "POSTGRES_DSN no configurado")
 class TestRepositorioOrdenesPostgres(unittest.TestCase):
     def setUp(self) -> None:
         self.repositorio = RepositorioOrdenesPostgres(POSTGRES_DSN)
@@ -85,6 +88,17 @@ class TestRepositorioOrdenesPostgres(unittest.TestCase):
         self.assertEqual(
             self.repositorio.obtener(orden_id).estado, EstadoOrden.rechazada
         )
+
+    def test_repositorio_ordenes_recrea_tabla_si_no_existe(self):
+        primero = _id("antes-drop")
+        segundo = _id("despues-drop")
+        self.ids.extend([primero, segundo])
+        self.repositorio.guardar(_orden(primero, EstadoOrden.aprobada))
+
+        _ejecutar(self.repositorio, "DROP TABLE ordenes")
+        self.repositorio.guardar(_orden(segundo, EstadoOrden.aprobada))
+
+        self.assertEqual(_contar(self.repositorio, segundo), 1)
 
     def test_guardar_si_estado_actualiza_solo_si_coincide(self):
         orden_id = _id("condicional")
@@ -145,16 +159,117 @@ class TestRepositorioOrdenesPostgres(unittest.TestCase):
             {EstadoOrden.borrador, EstadoOrden.pendiente},
         )
 
-    def test_guardar_con_postgres_caido_levanta_error(self):
-        orden_id = _id("caido")
-        self.ids.append(orden_id)
-        orden = _orden(orden_id, EstadoOrden.aprobada)
+    def test_ordenes_abiertas_filtra_estados_y_equipo(self):
+        abiertos = (
+            EstadoOrden.pendiente,
+            EstadoOrden.aprobada,
+            EstadoOrden.ejecutada,
+            EstadoOrden.observada,
+        )
+        cerrados = (
+            EstadoOrden.rechazada,
+            EstadoOrden.cerrada,
+            EstadoOrden.certificada,
+        )
+        ids = {
+            estado: _id(f"abierta-{estado.value}") for estado in (*abiertos, *cerrados)
+        }
+        otro_equipo = _orden(_id("otro-equipo"), EstadoOrden.aprobada).model_copy(
+            update={"equipo": "B-102"}
+        )
+        self.ids.extend([*ids.values(), otro_equipo.id])
+        for estado, orden_id in ids.items():
+            self.repositorio.guardar(_orden(orden_id, estado))
+        self.repositorio.guardar(otro_equipo)
 
+        devueltas = [
+            orden
+            for orden in self.repositorio.ordenes_abiertas("B-101")
+            if orden.id in ids.values()
+        ]
+
+        self.assertEqual(
+            {orden.id for orden in devueltas},
+            {ids[estado] for estado in abiertos},
+        )
+
+class TestConexionPereza(unittest.TestCase):
+    def test_init_no_crea_tablas_ni_conecta(self):
+        with (
+            patch.object(RepositorioOrdenesPostgres, "_crear_tablas") as crear,
+            patch.object(RepositorioOrdenesPostgres, "_abrir_conexion") as abrir,
+        ):
+            repositorio = RepositorioOrdenesPostgres("dsn-falso")
+
+        crear.assert_not_called()
+        abrir.assert_not_called()
+        self.assertEqual(repositorio._dsn, "dsn-falso")
+        self.assertIsNone(repositorio._conexion)
+
+    def test_abrir_conexion_reintenta_con_backoff(self):
+        conexion = MagicMock()
+        modulo = MagicMock()
+        modulo.connect.side_effect = [
+            ConnectionError("todavía no"),
+            ConnectionError("otra vez"),
+            conexion,
+        ]
+        with (
+            patch("sistema.repositorio_ordenes._psycopg", return_value=modulo),
+            patch("sistema.repositorio_ordenes.time.sleep") as dormir,
+        ):
+            repositorio = RepositorioOrdenesPostgres("dsn-falso")
+            self.assertIs(repositorio._abrir_conexion(), conexion)
+
+        self.assertEqual(modulo.connect.call_count, 3)
+        self.assertEqual(
+            dormir.call_args_list,
+            [
+                call(ESPERA_CONEXION_BASE_S),
+                call(ESPERA_CONEXION_BASE_S * 2),
+            ],
+        )
+
+    def test_abrir_conexion_agota_reintentos_y_levanta(self):
+        modulo = MagicMock()
+        modulo.connect.side_effect = ConnectionError("postgres caído")
+        with (
+            patch("sistema.repositorio_ordenes._psycopg", return_value=modulo),
+            patch("sistema.repositorio_ordenes.time.sleep") as dormir,
+        ):
+            repositorio = RepositorioOrdenesPostgres("dsn-falso")
+            with self.assertRaises(ConnectionError):
+                repositorio._abrir_conexion()
+
+        self.assertEqual(modulo.connect.call_count, REINTENTOS_CONEXION)
+        self.assertEqual(dormir.call_count, REINTENTOS_CONEXION - 1)
+
+    def test_tabla_inexistente_se_recrea_una_vez(self):
+        repositorio = RepositorioOrdenesPostgres("dsn-falso")
+        conexion = MagicMock()
+        cursor = conexion.cursor.return_value.__enter__.return_value
+        cursor.execute.side_effect = [
+            RuntimeError('relation "ordenes" does not exist'),
+            None,
+        ]
+        with (
+            patch.object(
+                repositorio, "_abrir_conexion", return_value=conexion
+            ),
+            patch.object(repositorio, "_crear_tablas") as crear,
+        ):
+            repositorio.guardar(_orden("tabla-inexistente", EstadoOrden.aprobada))
+
+        crear.assert_called_once_with()
+        self.assertEqual(cursor.execute.call_count, 2)
+
+    def test_guardar_con_postgres_caido_levanta_error(self):
+        repositorio = RepositorioOrdenesPostgres("dsn-falso")
         with patch.object(
-            self.repositorio, "_abrir_conexion", side_effect=RuntimeError("api caida")
+            repositorio, "_abrir_conexion", side_effect=RuntimeError("api caida")
         ) as abrir:
             with self.assertRaises(ErrorPersistenciaOrden) as contexto:
-                self.repositorio.guardar(orden)
+                repositorio.guardar(_orden("caido", EstadoOrden.aprobada))
 
         self.assertEqual(contexto.exception.operacion, "guardar orden")
         self.assertIsInstance(contexto.exception.__cause__, RuntimeError)
