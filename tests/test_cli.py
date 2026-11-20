@@ -85,6 +85,24 @@ class TestCli(unittest.TestCase):
         self.assertEqual(cliente.publicados[0][0], Topicos.ORDENES)
         self.assertIn("por=LICETTE", registros.output[0])
 
+    def test_aprobar_pendiente_no_pasa_por_el_revisor(self):
+        repositorio = RepositorioOrdenesFalso(orden(EstadoOrden.pendiente))
+        cliente = ClienteFalso()
+
+        with patch(
+            "sistema.flujo.validar_orden_publicable",
+            side_effect=AssertionError("el revisor no debe intervenir"),
+        ):
+            codigo = cli.main(
+                ["aprobar", "O-1", "--por", "LICETTE"],
+                repositorio=repositorio,
+                cliente=cliente,
+            )
+
+        self.assertEqual(codigo, 0)
+        self.assertIs(repositorio.orden.estado, EstadoOrden.aprobada)
+        self.assertEqual(len(cliente.publicados), 1)
+
     def test_aprobar_rechazada_devuelve_error_sin_cambiar_estado(self):
         repositorio = RepositorioOrdenesFalso(orden(EstadoOrden.rechazada))
         cliente = ClienteFalso()

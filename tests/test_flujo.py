@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 _patch_citas = patch("sistema.causas.verificar_cita", return_value=True)
@@ -55,6 +56,7 @@ def causa(
     accion="orden",
     ejecutor="propio",
     genera_orden=True,
+    citas=(),
 ):
     return Causa(
         codigo_falla=codigo_falla,
@@ -63,7 +65,7 @@ def causa(
         faltantes=(),
         tarea_codigo=tarea_codigo,
         equipo_orden=equipo_orden,
-        citas=(),
+        citas=tuple(citas),
         accion=accion,
         genera_orden=genera_orden,
         ejecutor=ejecutor,
@@ -101,6 +103,101 @@ class ConCitas(unittest.TestCase):
         parche = patch("sistema.causas.verificar_cita", return_value=True)
         parche.start()
         self.addCleanup(parche.stop)
+
+
+class TestRevisionPublicacion(ConCitas):
+    def _procesar(
+        self,
+        *,
+        citas=(),
+        repuestos=(),
+        materiales=("ACE-ISO220",),
+        verificar=True,
+        fragmentos=None,
+        ejecutor="propio",
+    ):
+        tareas = [
+            {
+                "codigo": "T-B-ACE",
+                "equipos": ["B-101"],
+                "detiene": False,
+                "repuestos": [
+                    {"codigo": codigo, "cantidad": 1.0} for codigo in repuestos
+                ],
+            }
+        ]
+        catalogo = CatalogoFalso(
+            tareas=tareas,
+            stock={"B-101": tuple(item_stock(codigo) for codigo in repuestos)},
+        )
+        datos_materiales = {"lista_materiales": {"B-101": list(materiales)}}
+        fragmentos = {} if fragmentos is None else fragmentos
+        with patch(
+            "sistema.flujo.causas_probables",
+            return_value=[
+                causa("F04", "T-B-ACE", "B-101", citas=citas, ejecutor=ejecutor)
+            ],
+        ), patch(
+            "sistema.causas.verificar_cita", return_value=verificar
+        ), patch(
+            "sistema.tools._fragmentos_manuales", return_value=fragmentos
+        ), patch(
+            "sistema.flujo.tools._cargar_materiales", return_value=datos_materiales
+        ):
+            return procesar(evento_sensor("B-101"), evidencia("B-101"), [], catalogo)
+
+    def test_cita_valida_y_repuesto_en_lista_aprueba(self):
+        resultado = self._procesar(
+            citas=("TX350-D §3.2",),
+            repuestos=("ACE-ISO220",),
+        )
+
+        self.assertEqual(resultado.orden.estado, EstadoOrden.aprobada)
+        self.assertEqual(resultado.problemas, ())
+        self.assertIn("cumple todas las reglas", resultado.orden.motivo)
+
+    def test_cita_inexistente_pasa_a_pendiente(self):
+        resultado = self._procesar(citas=("TX350-D §99",), verificar=False)
+
+        self.assertEqual(resultado.orden.estado, EstadoOrden.pendiente)
+        self.assertEqual(resultado.problemas, ("CITA_INEXISTENTE",))
+        self.assertIn("CITA_INEXISTENTE", resultado.orden.motivo)
+
+    def test_cita_vencida_pasa_a_pendiente(self):
+        resultado = self._procesar(
+            citas=("TX350-D §3.2",),
+            verificar=False,
+            fragmentos={"TX350-D §3.2": SimpleNamespace(vigente=False)},
+        )
+
+        self.assertEqual(resultado.orden.estado, EstadoOrden.pendiente)
+        self.assertEqual(resultado.problemas, ("CITA_VENCIDA",))
+        self.assertIn("CITA_VENCIDA", resultado.orden.motivo)
+
+    def test_repuesto_fuera_de_lista_no_duplica_codigo(self):
+        with patch(
+            "sistema.flujo.evaluar",
+            return_value=(EstadoOrden.pendiente, "REPUESTO_FUERA_DE_LISTA"),
+        ):
+            resultado = self._procesar(repuestos=("FC-CART-25",))
+
+        self.assertEqual(resultado.orden.estado, EstadoOrden.pendiente)
+        self.assertEqual(resultado.problemas, ("REPUESTO_FUERA_DE_LISTA",))
+        self.assertEqual(
+            resultado.orden.motivo.count("REPUESTO_FUERA_DE_LISTA"), 1
+        )
+
+    def test_pendiente_por_reglas_y_revisor_conserva_ambos_codigos(self):
+        resultado = self._procesar(
+            citas=("TX350-D §99",),
+            verificar=False,
+            ejecutor="contratista",
+        )
+
+        self.assertEqual(resultado.orden.estado, EstadoOrden.pendiente)
+        self.assertEqual(resultado.problemas, ("CITA_INEXISTENTE",))
+        self.assertIn("EJECUTOR_NO_PROPIO", resultado.orden.motivo)
+        self.assertIn("CITA_INEXISTENTE", resultado.orden.motivo)
 
 
 class TestFlujo(ConCitas):

@@ -13,10 +13,12 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from planta_contrato import EstadoOrden, EventoSistema, OrdenSistema, Repuesto
 
+from . import tools
 from .causas import Causa, EvidenciaEquipo, causas_probables
 from .historial_causas import reordenar_con_historial
 from .ordenes import construir_orden
 from .reglas import ContextoReglas, evaluar
+from .validacion import Problema, validar_orden_publicable
 
 if TYPE_CHECKING:
     from .tools import StockItem
@@ -68,6 +70,23 @@ def _motivos_unicos(*partes: str) -> tuple[str, ...]:
             if codigo and codigo not in unicos:
                 unicos.append(codigo)
     return tuple(unicos)
+
+
+def _codigo_motivo(segmento: str) -> str:
+    return segmento.split(":", 1)[0].strip()
+
+
+def _sumar_problemas(motivo: str, problemas: Sequence[Problema]) -> str:
+    segmentos = [
+        segmento.strip() for segmento in motivo.split("; ") if segmento.strip()
+    ]
+    codigos = {_codigo_motivo(segmento) for segmento in segmentos}
+    for problema in problemas:
+        if problema.codigo in codigos:
+            continue
+        segmentos.append(f"{problema.codigo}: {problema.detalle}")
+        codigos.add(problema.codigo)
+    return "; ".join(segmentos)
 
 
 def _tarea_en_catalogo(
@@ -181,6 +200,18 @@ def procesar(
     else:
         estado_final = EstadoOrden.aprobada
         motivo_final = motivo
+
+    hallazgos = validar_orden_publicable(
+        orden, candidata.citas, tools._cargar_materiales()
+    )
+    if hallazgos:
+        if estado_final == EstadoOrden.aprobada:
+            estado_final = EstadoOrden.pendiente
+        motivo_final = _sumar_problemas(motivo_final, hallazgos)
+    problemas_revisor = tuple(dict.fromkeys(problema.codigo for problema in hallazgos))
+
     orden = orden.model_copy(update={"estado": estado_final, "motivo": motivo_final})
 
-    return ResultadoFlujo(causas, orden, (estado, motivo), (), pendiente_por)
+    return ResultadoFlujo(
+        causas, orden, (estado, motivo), problemas_revisor, pendiente_por
+    )
