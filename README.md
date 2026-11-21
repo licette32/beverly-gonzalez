@@ -107,13 +107,13 @@ Todo en la PC de la planta; LLM opcional local; sin nube. Detalle en [D1](docs/D
 | **agente** | MQTT, audio, Whisper, detección, parte, órdenes, cierres, traza y LLM opcional | 2 CPU · 2 GB |
 | **postgres** | Estado de notas, respuestas, fragmentos, órdenes, cierres y decisiones | 0,5 CPU · 1 GB |
 
-Ollama no está en el compose principal; si se habilita, el agente lo alcanza como servicio local opcional.
+Ollama no está en el compose principal. `docker-compose.llm.yml` es opcional, usa el profile `llm` y no arranca por defecto: sin ese archivo el LLM queda deshabilitado (`LLM_HABILITADO=false`) y el flujo usa reglas. Para levantarlo: `docker compose -f docker-compose.llm.yml --profile llm up -d ollama`.
 
 ### Estructura del repositorio
 
 ```
 .
-├── README.md · INFORME.md · docker-compose.yml · .env.example
+├── README.md · INFORME.md · docker-compose.yml · docker-compose.llm.yml (opcional) · .env.example
 ├── agente/
 │   ├── Dockerfile · requirements.txt
 │   ├── datos/                  materiales.yaml
@@ -161,7 +161,7 @@ docker compose -p alumno-novit up -d --build
 
 Variables de entorno (opcionales, ver `.env.example`): `MQTT_HOST`, `MQTT_PORT`, `SISTEMA_NOMBRE`, `HEARTBEAT_S`, `LOG_LEVEL`, `TZ`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `POSTGRES_DSN`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_REINTENTO_S`, `PREGUNTA_TIMEOUT_S`, `OMP_NUM_THREADS`, `INDEXAR_PG_AL_ARRANCAR`, `FLUJO_LIMITE_S`, `REINTENTOS_TOOL_LECTURA`, `ESPERA_REINTENTO_TOOL_S`, `UMBRAL_LOOP_PASOS`, `LLM_HABILITADO`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODELO`, `LLM_TIMEOUT_S`, `LLM_COSTO_USD_POR_MTOK_ENTRADA` y `LLM_COSTO_USD_POR_MTOK_SALIDA`.
 
-El LLM viene apagado; si se habilita usa Ollama en `/api/chat` y el host local debe estar en `NO_PROXY`. Detalle en [D8](docs/DECISIONES.md#d8-ollama-y-red).
+El LLM viene apagado; si se habilita usa Ollama en `/api/chat`. En esta verificación no se ejecutó con un modelo real: el adaptador está listo, pero no se probó en la PC de planta por sus 4 CPU / 8 GB y sin GPU. Detalle en D8.
 
 ### Cómo verificar el flujo
 

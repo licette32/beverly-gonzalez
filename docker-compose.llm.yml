@@ -1,0 +1,25 @@
+# Si el agente debe alcanzar ollama sin proxy, agregar "ollama" a NO_PROXY del servicio agente en docker-compose.yml.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    profiles:
+      - llm
+    networks:
+      - planta-lan
+    labels:
+      academia.planta: pc
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "${OLLAMA_CPUS:-4}"
+          memory: ${OLLAMA_MEMORY:-6g}
+
+networks:
+  planta-lan:
+    external: true
+
+volumes:
+  ollama:

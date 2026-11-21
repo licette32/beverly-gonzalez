@@ -49,6 +49,10 @@ interrumpan llamadas en vuelo.
 
 ## Límites del análisis LLM
 
+- En esta verificación el LLM no se ejecutó con un modelo real: el adaptador
+  está listo para Ollama local o API, pero la prueba quedó en el camino
+  determinista. No se probó en la PC de planta por restricciones de hardware
+  (4 CPU / 8 GB y sin GPU), así que el compose opcional no arranca por defecto.
 - `LLM_HABILITADO=false` por defecto. Sin Ollama en el compose principal, el
   flujo usa solo reglas. El adaptador no decide estado, tareas, repuestos,
   citas, ejecutor ni motivo: solo reordena causas ya detectadas y justifica.
