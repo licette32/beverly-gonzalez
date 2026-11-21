@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 
 HOSTS_LOCALES = frozenset({"localhost", "127.0.0.1", "::1", "ollama"})
 SUFIJOS_INTERNOS = (".local", ".lan", ".internal")
+JUSTIFICACION_MAX_CARACTERES = 500
 
 
 class CausaJustificada(BaseModel):
@@ -168,6 +169,15 @@ def _contenido(crudo: Mapping[str, Any]) -> str:
     return contenido
 
 
+def _justificaciones_recortadas(
+    justificaciones: Sequence[CausaJustificada],
+) -> dict[str, str]:
+    return {
+        item.codigo_falla: item.justificacion[:JUSTIFICACION_MAX_CARACTERES]
+        for item in justificaciones
+    }
+
+
 class AnalizadorLLM:
     def __init__(
         self,
@@ -304,9 +314,7 @@ class AnalizadorLLM:
             )
             return None
 
-        justificaciones = {
-            item.codigo_falla: item.justificacion for item in respuesta.justificaciones
-        }
+        justificaciones = _justificaciones_recortadas(respuesta.justificaciones)
         registrar(
             "ok",
             {

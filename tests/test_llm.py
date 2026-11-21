@@ -205,6 +205,28 @@ class TestAnalizadorLLM(unittest.TestCase):
         fila = self._fila_llm(registro)
         self.assertEqual(fila.argumentos["justificaciones"]["F04"], texto)
 
+    def test_justificacion_larga_se_recorta_en_traza_y_propuesta(self):
+        texto = "x" * 600
+        contenido = {
+            "prioridad": ["F04"],
+            "justificaciones": [{"codigo_falla": "F04", "justificacion": texto}],
+        }
+        analizador, _ = self._analizador(contenido)
+        registro = RegistroDecisionesMemoria()
+
+        propuesta = analizador.analizar(
+            evento=evento_sensor(evento_id="E-1"),
+            evidencia=EvidenciaEquipo("B-101", DESDE, HASTA, ()),
+            historial=[],
+            causas=[causa_orden()],
+            registro=registro,
+        )
+
+        self.assertIsNotNone(propuesta)
+        self.assertEqual(propuesta.justificaciones["F04"], texto[:500])
+        fila = self._fila_llm(registro)
+        self.assertEqual(fila.argumentos["justificaciones"]["F04"], texto[:500])
+
     def test_host_local_con_enlace_caido_analiza(self):
         pendientes = ColaPendientes(arriba_inicial=False)
         analizador, cliente = self._analizador(
