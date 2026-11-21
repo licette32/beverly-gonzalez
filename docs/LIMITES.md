@@ -1,8 +1,9 @@
 # Límites de control
 
-El agente de la Entrega 1 no usa un modelo de lenguaje en el camino crítico, así
-que no hay tokens ni costo que limitar. Lo que se limita es el tiempo y las
-rondas. Al llegar a un límite el agente avisa a la tablet y se detiene.
+En la Entrega 2 el camino crítico sigue siendo determinista: el LLM es opcional
+y no decide estado, tareas, repuestos ni citas. Lo que se limita es el tiempo,
+las rondas y el tamaño de los datos trazables. Al llegar a un límite el agente
+avisa a la tablet y se detiene.
 
 | Etapa | Límite | Variable | Qué pasa al llegar |
 |---|---|---|---|
@@ -14,6 +15,13 @@ rondas. Al llegar a un límite el agente avisa a la tablet y se detiene.
 | Herramientas HTTP de solo lectura | 5 s por intento, 2 intentos, 0,5 s entre intentos | `HISTORIAN_TIMEOUT_S`, `CATALOGO_TIMEOUT_S`, `HISTORIAL_TIMEOUT_S`, `REINTENTOS_TOOL_LECTURA`, `ESPERA_REINTENTO_TOOL_S` | Timeout/conexión/5xx se reintentan; 4xx y errores de parseo no; cada intento se registra en `decisiones` |
 | Flujo de una orden | 600 s por orden | `FLUJO_LIMITE_S` | Antes de construir: `orden=None` y `LIMITE_TIEMPO`; después: orden pendiente guardada con `LIMITE_TIEMPO`, sin publicar en `Topicos.ORDENES` |
 | Repetición de pasos | 3 repeticiones de `(paso, herramienta, argumentos)` por `correlation_id` | `UMBRAL_LOOP_PASOS` | Se registra `paso="loop"`; la orden queda pendiente con `LOOP_DETECTADO` |
+
+El control de reintentos, deadline y loops ya está implementado:
+`FLUJO_LIMITE_S=600`, `REINTENTOS_TOOL_LECTURA=2`,
+`ESPERA_REINTENTO_TOOL_S=0.5` y `UMBRAL_LOOP_PASOS=3`. Los reintentos cubren
+timeout, conexión y HTTP 5xx; no 4xx ni errores de parseo. La detección de
+deadline y loops es cooperativa: se verifica entre etapas, sin hilos que
+interrumpan llamadas en vuelo.
 
 ## Reglas
 
@@ -30,12 +38,41 @@ rondas. Al llegar a un límite el agente avisa a la tablet y se detiene.
   entre etapas, sin hilos que interrumpan llamadas en vuelo.
 - Un loop se decide solo por repetición de `(paso, herramienta, argumentos)`
   dentro del mismo `correlation_id`. No se infiere de transiciones:
-  `aprobada → pendiente` no existe y `registrar_cierre` es idempotente.
+  `aprobada → pendiente` no existe en la tabla de transiciones, aunque el
+  el paso revisor puede dejar una orden pendiente antes de publicarla, y
+  `registrar_cierre` es idempotente.
 - `argumentos` distingue las dos lecturas de materiales: una viene de
   `tareas_no_estandar` y otra de `_cargar_materiales`.
 - Los errores finales de las herramientas se registran con
   `reintentable=False` para evitar multiplicadores de reintentos.
 - Los valores por defecto se pueden cambiar por variable de entorno en el compose.
+
+## Límites del análisis LLM
+
+- `LLM_HABILITADO=false` por defecto. Sin Ollama en el compose principal, el
+  flujo usa solo reglas. El adaptador no decide estado, tareas, repuestos,
+  citas, ejecutor ni motivo: solo reordena causas ya detectadas y justifica.
+- Si el host del LLM es externo y la sonda de enlace está caída, no se llama al
+  modelo: se registra `analisis_llm` con `resultado="sin_enlace"` y se agrega
+  `analisis:<correlation_id>` a `ColaPendientes`. Un host local no se cuenta
+  como enlace caído. Al volver el enlace, esa entrada solo se cuenta como
+  pendiente en el latido; no se reejecuta el análisis.
+- Las justificaciones del LLM se guardan completas en la respuesta, pero se
+  recortan a 500 caracteres antes de persistirlas en `decisiones` y antes de
+  devolver `AnalisisPropuesto`. El recorte está en `llm.py` y tiene
+  test en `tests/test_llm.py`. No cambia el estado de la orden.
+- El paso revisor no observa una orden sin ninguna cita. Hoy eso no es un
+  problema para las reglas: la decisión depende de falla, stock, tarea y
+  ejecutor, no de que exista una cita textual.
+
+## Límites de habilitación y visión
+
+- Certificación/habilitación: `certificar` valida el formato `HAB-AAAA-NNNN` y
+  monto positivo, pero no obtiene el monto desde CT-SVP-2025: ese dato queda
+  pendiente. La certificación G3 se revisa a mano.
+- Visión: las fotos no se descargan ni se asocian a una fila del parte; no hay
+  modelo de visión. La URL de la foto se incluye en `observacion` para el aviso
+  S1, sin análisis de imagen.
 
 ## Límites de transiciones y CLI
 
@@ -101,7 +138,12 @@ Evidencia reproducible con `dialogo.responder` sobre NOTA-00008:
 - `B-103/estado/valor=0.0` → `filas_mostradas=1`, pero `confirmo=False` por
   `sobra` (“Lo de la tres no lo dije”).
 
-Por eso #23 corrige la presentación (tag y URL de la foto en `observacion`) pero
-no puede subir A2/A3 con este corrector. El hallazgo se reporta al curso: para
+Por eso la corrección de presentación (tag y URL de la foto en `observacion`) no
+puede subir A2/A3 con este corrector. El hallazgo se reporta al curso: para
 que estas notas cuenten, el corrector debería aceptar filas con `valor=None`
 comparando `tag`, `variable` y `observacion`/`foto`.
+
+## Documentos de diseño pendientes de actualización
+
+`docs/SPEC_PARTE.md` y `docs/CONTEXT_BUILDER.md` son documentos de diseño; su
+actualización a la Entrega 2 está pendiente.

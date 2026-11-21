@@ -1,95 +1,113 @@
-# INFORME TÉCNICO – Entrega 1
+# INFORME TÉCNICO – Entrega 2
 
-## Entrega 2 (en curso)
+## Resumen
 
-El análisis LLM es opcional (`LLM_HABILITADO=false` por defecto). Cuando se habilita, el adaptador usa Ollama `/api/chat` con `format` JSON Schema, valida la respuesta con Pydantic `extra="forbid"` y registra tokens/costo reales en `decisiones`. El LLM solo prioriza causas detectadas por reglas; no propone repuestos, citas, tareas, ejecutor ni estado de la orden.
+La Entrega 2 conserva el camino crítico determinista de la Entrega 1 y agrega órdenes de trabajo, el paso revisor, la traza de decisiones, el control de reintentos/deadline/loops, la durabilidad ante corte y el análisis LLM opcional. Todo lo que decide estado, tareas, repuestos o citas sigue siendo código determinista.
 
-| Tarea | Modelo / versión | Tokens | Costo USD |
-|-------|------------------|-------:|----------:|
-| Transcripción del parte | Whisper `base` int8 (faster-whisper 1.2.1) | 0 | 0 |
-| Detección y análisis de causas | reglas + LLM opcional (`LLM_MODELO`) | 0 si LLM deshabilitado; reales si se llama | reales si se llama |
-| Borrador y estado de la orden | reglas en código (`flujo.py`, `reglas.py`) | 0 | 0 |
-| Validación de citas y repuestos | reglas en código (`validacion.py`) | 0 | 0 |
+El LLM es opcional y queda apagado por defecto (`LLM_HABILITADO=false`). **No se ejecutó con un modelo real** durante la verificación: las mediciones de `analisis_llm` usan el fake de Ollama de `tests/test_llm.py`. No hay modelo de visión: las fotos no se descargan ni se asocian a una fila; la URL de la foto se incluye en `observacion` para el aviso S1. Ollama no está en el compose principal.
 
-Cuando no se llama al LLM, la traza de `analisis_llm` queda con `modelo="reglas"`. Si la respuesta es inválida, se descarta sin alterar `ResultadoFlujo`, pero se conservan tokens/costo reales y `argumentos.resultado="invalido"`.
+## 1. Modelos y medición
 
-## 1. Modelos Utilizados
+Los valores de tokens, costo y duración salen de filas reales de `decisiones` usando `RegistroDecisionesMemoria` en la suite de tests. La corrida de verificación produjo `analisis_llm` con `prompt_eval_count=10` y `eval_count=5` (15 tokens), `version="ministral-3:3b-v1"` y `duracion_ms=4`; las filas `evaluar` y `validar_orden_publicable` del camino determinista dieron 0 tokens, costo 0 y `duracion_ms=0`. Con `LLM_HABILITADO=false`, la fila `analisis_llm` quedó con `modelo="reglas"`, `resultado="deshabilitado"`, 0 tokens, costo 0 y `duracion_ms=0`.
 
-### 1.1 Transcripción de audio
-- **Motor:** `faster-whisper` versión 1.2.1
-- **Modelo:** Whisper `base` (aprox. 74 M de parámetros), pesos de OpenAI, cuantizado en `int8`, ejecutado con `faster-whisper` (CTranslate2). Repositorio del modelo: `Systran/faster-whisper-base` (mapeo de `base` en `faster_whisper/utils.py`).
-- **Parámetros:** `beam_size=5`, `cpu_threads=2`, `OMP_NUM_THREADS=2`, `language="es"`
-- **Prompt de vocabulario:** `PROMPT` personalizado con nombres de equipos, variables y unidades de la planta (incluye "kg/cm2", "psi", "bar", nombres de bombas B-101/B-102/B-103, filtros F-201A/F-201B, valores numéricos en español)
-- **Duración típica:** 4.46 s por nota de ~11 s con `base` beam 1 en hardware de 2 núcleos; el setup actual (beam 5 + 2 threads) queda dentro del presupuesto de B2 (~30 s reales por nota)
+| Tarea | Modelo | Versión | Parámetros | Hardware | Tokens | Costo USD | Duración |
+|-------|--------|---------|------------|----------|-------:|----------:|---------:|
+| `evaluar` / `validar_orden_publicable` (`reglas-python`) | `reglas` | código del repo, revisión `7adf6e1` | reglas puras; sin LLM; `extra="forbid"` en contratos | PC de planta: 4 CPU / 8 GB, sin GPU | 0 | 0 | 0 ms medido en la corrida de verificación |
+| `analisis_llm` habilitado | `ministral-3:3b` | `ministral-3:3b-v1` (respuesta del fake) | `LLM_HABILITADO=true`, `LLM_MODELO=ministral-3:3b`, `/api/chat`, `stream=False`, JSON Schema, `LLM_TIMEOUT_S=120` | CPU local sin GPU; verificación con fake Ollama en la suite | 15 = 10 entrada + 5 salida | 0 local; 0,00002 con 1 USD/MTok entrada y 2 USD/MTok salida | 4 ms medido en la corrida de verificación |
+| `analisis_llm` deshabilitado | `reglas` | no aplica | `LLM_HABILITADO=false`; no se llama a Ollama | PC de planta: 4 CPU / 8 GB, sin GPU | 0 | 0 | 0 ms medido en la corrida de verificación |
 
-### 1.2 Interpretación y Corrección de Parte
-- **Motor:** Ningún LLM en el camino crítico
-- **Enfoque:** Reglas deterministas codificadas en `agente/sistema/interpretacion.py`
-- **Funciones aplicadas en orden:**
-  - `_corregir_equipo`: Resuelve ambigüedad de equipo (ej. "la dos" -> B-102) y recalcula la unidad con `catalogo.unidad_manometro(tag)`
-  - `_corregir_unidad`: Cambia de unidad cuando el operador dice "no en psi" si antes decía "kg/cm2" y el catálogo indica otra cosa
-  - `_corregir_valor`: Corrige valores numéricos (manejo de "dieciocho" vs "uno ocho", etc.)
-  - `_agregar_faltante`: Añade ítems que faltan en la nota
-  - `_quitar_sobrante`: Elimina ítems que el operador dijo que no eran
-- **Corrección de unidad NOTA-00011:** Al resolver "la dos" -> B-102, la unidad se recalcula automáticamente de kg/cm2 a psi usando `catalogo.unidad_manometro("B-102")` -> "psi"
+Notas sobre la tabla:
 
-### 1.3 Detección de Seguridad (S1-S4)
-- **Motor:** Código determinista, sin LLM
-- **Reglas S1-S4:** Implementadas en `agente/sistema/seguridad.py` sobre la transcripción
-- **Tiempo de respuesta:** < 30 s reales (exige B2)
+- `tokens` es la suma de `prompt_eval_count` y `eval_count`, como la guarda `agente/sistema/llm.py` en la columna `tokens` de `decisiones`.
+- `costo_usd` es 0 cuando las tarifas por millón de tokens están en 0 (configuración por defecto para un LLM local). Si se setean `LLM_COSTO_USD_POR_MTOK_ENTRADA` y `LLM_COSTO_USD_POR_MTOK_SALIDA`, se calcula con esos valores; la corrida con fake usó 1 y 2 USD/MTok para verificar la fórmula.
+- La duración de las filas deterministas puede ser 0 ms porque se mide con resolución de milisegundos. No es una estimación: es el valor registrado en `duracion_ms`.
+- La justificación devuelta por el LLM se recorta a 500 caracteres antes de registrarse (`JUSTIFICACION_MAX_CARACTERES` en `llm.py`), con test en `tests/test_llm.py`.
 
-### 1.4 Tools y MCP
-- **Tools de solo lectura** con contratos Pydantic estrictos (`extra="forbid"`):
-  - `equipos`, `historian`, `catalogo`, `stock`, `tareas_catalogo`, `manuales_buscar`
-  - Expuestas por MCP en `mcp_server.py`: equipos, historian, catalogo_planta, stock, tareas_catalogo, manuales_buscar. `manuales_buscar` consulta `rag.buscar` (k=5) con timeout de 15 s y un reintento, filtra los manuales vigentes de PIA-3 y devuelve citas con `cita, documento, seccion, texto, vigente`. El servidor se ejecuta por separado y no forma parte del flujo del agente.
-- **Servidor MCP:** `FastMCP("pia3-planta")` con herramientas: `equipos`, `historian`, `catalogo_planta`, `stock`, `tareas_catalogo`, `manuales_buscar`
-- **MQTT:** Cliente `ClienteMQTT` con validación Pydantic de cada publicación antes de enviarla
+### Transcripción y modelo siempre activo
 
-## 2. Hardware y Entorno de Ejecución
+- **Motor:** `faster-whisper` 1.2.1, Whisper `base` int8, `beam_size=5`, `cpu_threads=2`, `OMP_NUM_THREADS=2`, `language="es"` y prompt de vocabulario de planta.
+- **Medición previa:** en i3-1115G4 de 2 núcleos, `base` tarda 4,46 s con beam 1 y 5,41 s con beam 5 sobre una nota de 11,24 s; `small` tarda 19,77 s y 24,38 s y queda descartado.
+- **Hardware de referencia:** PC sin GPU, 4 núcleos y 8 GB; el compose limita el agente a 2 CPU / 2 GB y Postgres a 0,5 CPU / 1 GB.
+- Whisper no produce tokens de LLM ni costo por API: ejecuta localmente en CPU.
 
-| Componente | Especificación |
-|------------|----------------|
-| **Hardware** | Dell Inspiron 15 3511; Intel Core i3-1115G4 (2 núcleos / 4 hilos); 7,74 GiB de RAM; Intel UHD Graphics; Windows 11 Home 10.0.26200 (64 bits). |
-| **Docker** | `docker-compose.yml` con 2 servicios: `agente` y `postgres`. La planta (broker, enlace, sim) corre aparte, desde el compose del curso. |
-| **Sistema de Base de Datos** | PostgreSQL 16 con extensión `pgvector` (imagen `pgvector/pgvector:pg16`) |
-| **Entorno de deploy** | `docker compose build --no-cache` para build oficial |
+## 2. Qué se midió y qué no
 
-### Presupuesto de recursos (medido en i3 de 2 núcleos, modelo caliente, int8, 2 hilos, nota `NOTA-00001.wav` de 11,24 s):
-- **Whisper `base` beam_size=1:** 4.46 s por nota de 11.24 s
-- **Whisper `base` beam_size=5:** 5.41 s (queda dentro de B2 de 30 s reales)
-- **Pequeño (`small`) no entra:** 19.77 s con beam 1, 24.38 s con beam 5; `small` no entra en el presupuesto al sumarse a Whisper + agente
-- **Elección de `base` + beam 5 + OMP_NUM_THREADS=2:** Deja la primera inferencia dentro de B2 con margen de seguridad
+Se midió:
 
-## 3. Consumo de Tokens y Costo Aproximado
+- Latencia de transcripción con Whisper `base` int8 en CPU local.
+- Tokens, costo y duración de `analisis_llm` con fake de Ollama, tanto habilitado como deshabilitado.
+- Filas deterministas de `reglas.evaluar` y `validar_orden_publicable` desde `decisiones`.
+- Recall@k del RAG sobre 701 fragmentos y 71 preguntas.
 
-No se usan modelos de lenguaje ni APIs de pago. Consumo de tokens: 0. Costo en la nube: USD 0. La transcripción corre localmente en CPU.
+No se midió:
 
-No se evaluó un LLM local. Se descartó por el presupuesto de 8 GB y porque las decisiones deben ser deterministas.
+- Un LLM real (`ministral-3:3b` u otro) ejecutándose en Ollama: la verificación usa solo un fake.
+- Latencia, consumo de memoria o calidad de respuestas de Ollama en la PC de 4 CPU / 8 GB.
+- Modelos de visión: no hay modelo, no se descargan fotos y no hay asociación foto-fila.
+- El monto de certificación desde CT-SVP-2025; la certificación G3 queda para revisión manual.
 
-## 4. Conclusión y Elección de Modelos
+Con un LLM real habría que medir latencia p95, memoria residente, estabilidad del JSON estructurado y tokens reales por escenario; con visión real habría que medir precisión de extracción desde foto y su efecto en A2/A3, hoy limitados por el corrector oficial.
 
-### Por qué `faster-whisper` `base` int8:
-- **Precisión suficiente** para el dominio de planta (nombres de equipos, valores numéricos en español, unidades)
-- **Performance dentro de B2:** 4.46 s base beam 1 / 5.41 s base beam 5 en hardware de 2 núcleos; el setup actual (beam 5 + 2 threads) deja la primera inferencia dentro del presupuesto de 30 s reales
-- **Costo cero en tokens:** Ejecución 100% local, sin dependencia de APIs externas
-- **Compatibilidad con hardware:** Caben en 8 GB RAM junto con Whisper, agente y PostgreSQL
+## 3. Recuperación documental
 
-### Por qué interpretación determinista (sin LLM en camino crítico):
-- **Seguridad:** Las reglas de alarma (B2) no pueden depender de la variabilidad de un modelo
-- **Auditoría:** Mismo input -> mismo output garantizado
-- **Cumplimiento de restricciones:** 8 GB RAM + 4 CPU justifican el uso de modelos pequeños + reglas en código
-- **Rendimiento predecible:** Los tiempos de ejecución son fijos y conocidos, a diferencia de la latencia de un LLM
+La comparación ya estaba reportada en el INFORME de la Entrega 1:
 
-### Por qué Whisper sobre otras opciones:
-- `small` con beam 1 tarda 19.77 s; con beam 5 tarda 24.38 s – `small` no entra en el presupuesto cuando se suma al resto del agente
-- `medium` tarda mucho más y tampoco caben los parámetros en 8 GB
-- Modelos en la nube (OpenAI Whisper, etc.) violan la restricción "sin enlace" de B2 (el enlace se cae a los 10 minutos en fuga-sin-enlace)
+| Métrica | Este sistema | BM25 |
+|---------|-------------:|-----:|
+| hit@5 | 0,831 | 0,850 |
+| recall@5 | 0,702 | 0,660 |
+| Rev. C antes que D | 0/71 | n/d |
 
-### Conclusión general:
-La arquitectura actual optó por un **enfoque híbrido**: Whisper local para la transcripción (único modelo probabilístico en el camino crítico) + reglas deterministas para toda la toma de decisiones (seguridad, parte, confirmaciones, rango histórico). Este diseño:
-- La corrida `etapa-limites` (`martes-tranquilo` + `fuga-sin-enlace`) obtuvo **86.7/100** (54.61 de 63 puntos medidos): A1, A4a, A4b, B2, E1, E3, F1 y F2 al 100%; A2 58%, A3 69%, B1 97%, E2 50%. Quedan sin datos tormenta-perfecta, sin-luz, contratista, ataque y libre.
-- Recuperación offline en pgvector (701 fragmentos, 71 preguntas): hit@5 0,831 (base BM25 0,850), recall@5 0,702 (base 0,660), Rev. C antes que D: 0/71.
-- Permite **builds oficiales** limpios con `docker compose build`
-- Permite **evaluación contra la verdad** con 151 tests (80 subtests; 1 test de integración se omite sin `POSTGRES_DSN`)
-- Respeta las **restricciones de hardware** (4 núcleos, 8 GB, sin GPU)
-- Elimina **dependencias externas** durante la corrección (el enlace de red se puede cortar)
+`hit@5` queda levemente por debajo de BM25 y `recall@5` por encima. El `0/71` de la Rev. C se debe al filtro `vigente`, no a una preferencia aprendida. `manuales_buscar` está expuesto por MCP y es usado por el flujo para citar manuales vigentes en las causas; el análisis con LLM opcional no cambia esa recuperación.
+
+## 4. Resultados del corrector
+
+Última corrida local disponible:
+
+| Criterio | Última corrida |
+|----------|---------------:|
+| A1 Cobertura | 88 % |
+| A2 Borrador al primer intento | 58 % |
+| A3 Parte final correcto | 64 % |
+| A4a Pregunta cuando hace falta | 100 % |
+| A4b No pregunta de más | 100 % |
+| B1 Sin novedad / Escalado | 92 % |
+| B2 Alerta de seguridad | 100 % |
+| E1 Sigue andando sin enlace | 100 % |
+| E2 Pendientes visibles | 50 % |
+| E3 Sin duplicados | 100 % |
+| F1 Mensajes válidos | 100 % |
+| F2 Latido | 100 % |
+
+## 5. Control de reintentos, deadline y loops
+
+| Mecanismo | Valor | Evidencia |
+|-----------|-------|-----------|
+| Reintentos de tools HTTP de solo lectura | `REINTENTOS_TOOL_LECTURA=2`, `ESPERA_REINTENTO_TOOL_S=0,5` | `tests/test_tools.py` verifica 2 intentos en timeout, 1 en 4xx y `resultado` `reintento`/`error` en `decisiones` |
+| Deadline por orden | `FLUJO_LIMITE_S=600` | Antes de construir devuelve `orden=None`; después guarda la orden pendiente con `LIMITE_TIEMPO`, sin publicarla en `Topicos.ORDENES` |
+| Loops | `UMBRAL_LOOP_PASOS=3` sobre `(paso, herramienta, argumentos)` y `correlation_id` | `tests/test_flujo.py` cubre corte antes/después de construir y excluye `deadline`, `loop` y `tool_timeout` de la cuenta |
+
+El control es cooperativo: se verifica entre etapas, sin hilos que interrumpan llamadas en vuelo. Los reintentos aplican a timeout, conexión y HTTP 5xx; no a 4xx ni a errores de parseo. Los errores finales quedan con `reintentable=False`.
+
+## 6. Trazabilidad y verificación cruzada
+
+La tabla `decisiones` tiene `id`, `correlation_id`, `tarea`, `paso`, `modelo`, `herramienta`, `argumentos`, `tokens`, `costo_usd`, `duracion_ms` y `creado_ts`. El `correlation_id` del flujo de órdenes es `evento.id`. Los modelos `reglas`, `humano` y `control` aparecen según el origen de la decisión; `control` se usa para `deadline`, `loop`, `tool_timeout` y cada intento de herramienta.
+
+Evidencia de git usada para cruzar afirmaciones:
+
+- `7adf6e1` control: reintentos acotados, deadline por orden y detección de loops
+- `193a92a` tablet: resolver equipo y foto en aviso S1; documentar límite del corrector
+- `43c46f1` LLM: análisis opcional que prioriza causas, con fallback determinista
+- `05b16a4` trazabilidad: registrar cada paso de decisión de una orden
+- `8ce9036` flujo: paso revisor de citas y repuestos antes de decidir la orden
+- `607c0c2` latido: sonda de enlace real y durabilidad ante corte
+
+La consulta al fake repo reproducida para la tabla fue `RegistroDecisionesMemoria` vía `tests/test_llm.py`, filtrando `analisis_llm`, `evaluar` y `validar_orden_publicable` por `correlation_id="E-1"`.
+
+## 7. Conclusión
+
+Se midieron la transcripción local, los tokens, el costo y la duración del análisis LLM con fake de Ollama, las filas deterministas de `decisiones`, la recuperación documental, los resultados del corrector y el control de reintentos, deadline y loops.
+
+No se midió un LLM real: el adaptador es opcional y viene apagado por defecto (`LLM_HABILITADO=false`), Ollama no está en el compose principal y la verificación usó solo un fake. Tampoco se midió visión: no hay modelo de visión, las fotos no se descargan ni se asocian a una fila.
+
+Con un LLM real se podrían medir latencia p95, memoria residente, estabilidad del JSON estructurado y tokens por escenario. Con un modelo de visión real se podría medir precisión de extracción desde fotos y su efecto en A2/A3, hoy limitados por el corrector oficial.

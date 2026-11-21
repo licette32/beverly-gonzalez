@@ -2,7 +2,7 @@
 
 Fecha de registro: 2026-11-10
 
-Este documento registra las decisiones acordadas para la Entrega 1 y las que quedan para entregas posteriores. Cada decisión indica alternativas, motivo y consecuencias.
+Este documento registra las decisiones acordadas para la Entrega 2. Cada decisión indica alternativas, motivo y consecuencias.
 
 ## Alcance de la Entrega 1
 
@@ -16,11 +16,11 @@ Este documento registra las decisiones acordadas para la Entrega 1 y las que que
 
 ## D1. Ejecución local
 
-**Decisión:** la Entrega 1 corre completamente local. La nube no es requisito; si se evalúa en la Entrega 2, será opcional y asíncrona.
+**Decisión:** la Entrega 2 corre completamente local. La nube no es requisito.
 
-**Alternativas:** usar modelos en la nube desde la primera entrega.
+**Alternativas:** usar modelos en la nube.
 
-**Por qué:** la corrección corre en una máquina con 4 CPU y 8 GB, sin GPU, y la planta exige funcionar sin enlace y sin dependencias externas.
+**Por qué:** la corrección corre en una máquina con 4 CPU y 8 GB, sin GPU, y la planta exige funcionar con enlace intermitente y sin nube.
 
 **Consecuencias:** el sistema debe arrancar con modelos locales y no puede depender de Internet durante la corrección.
 
@@ -82,21 +82,21 @@ Número reservado; no hay decisión registrada.
 
 ## D8. Ollama y red
 
-**Decisión:** en la Entrega 1 no se usa Ollama ni ningún modelo de lenguaje. La configuración de proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`) es solo para el agente.
+**Decisión:** en la Entrega 2 el adaptador LLM es opcional y está apagado por defecto (`LLM_HABILITADO=false`). Si se habilita, usa Ollama en `/api/chat`; Ollama no tiene servicio en el compose principal. La configuración de proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`) es solo para el agente y el host local de Ollama debe figurar en `NO_PROXY`.
 
-**Alternativas:** para la Entrega 2, Ollama podría integrarse como servicio opcional detrás del broker.
+**Alternativas:** un LLM en el camino crítico; declarar Ollama como servicio del compose principal.
 
-**Por qué:** el código del agente (`agente/sistema`) no contiene referencias a Ollama ni a ningún LLM; el circuito de voz, detección y alerta funciona con Whisper local y reglas deterministas. La Entrega 1 corre completamente local.
+**Por qué:** el sistema debe funcionar con 4 CPU, 8 GB, sin GPU y con enlace intermitente; el camino crítico sigue siendo determinista y no depende de la nube.
 
-**Consecuencias:** no hay dependencia de Ollama ni de un servicio LLM externo; el proxy se limita al agente.
+**Consecuencias:** sin LLM o con enlace caído para un host externo, el flujo sigue con reglas; el análisis pendiente se cuenta en el latido y no se reejecuta al volver el enlace.
 
 ## D9. RAG documental
 
-**Decisión:** el RAG documental se indexa en pgvector, pero sigue fuera del camino crítico. `embeddings.py` reemplaza el TF-IDF de vocabulario variable por un hashing determinista de tokens (`zlib.crc32(token) % 4096`) con pesos IDF sobre las posiciones, porque no hay un modelo de embeddings en la lista cerrada y así la dimensión queda fija para la columna `vector(4096)`. `indice_pg.py` crea la extensión y la tabla `fragmentos`, y hace altas idempotentes (`ON CONFLICT (id) DO UPDATE`). `main.py` lanza un hilo daemon que carga los fragmentos desde la API de la planta y los indexa después de `repositorio.iniciar()`, sin bloquear el latido ni el worker. `rag._Retriever` usa `indice_pg.buscar` (distancia coseno `<=>` con `statement_timeout`) cuando hay `POSTGRES_DSN` y el índice responde; si falla o no hay filas, cae al índice en memoria. La búsqueda híbrida BM25 + vectorial con RRF (`_rrf`) se mantiene. No está conectado a `coordinador.py`: el flujo de notas no consulta RAG. Los límites, el stock y el catálogo de tareas no salen de RAG: se consultan por API, SQL o YAML. DIM = 4096; pgvector no permite índices HNSW/IVFFlat por encima de 2000 dimensiones, así que la búsqueda es exacta (sin índice), válida para ~700 fragmentos.
+**Decisión:** el RAG documental se indexa en pgvector, pero sigue fuera del camino crítico. `embeddings.py` reemplaza el TF-IDF de vocabulario variable por un hashing determinista de tokens (`zlib.crc32(token) % 4096`) con pesos IDF sobre las posiciones, porque no hay un modelo de embeddings en la lista cerrada y así la dimensión queda fija para la columna `vector(4096)`. `indice_pg.py` crea la extensión y la tabla `fragmentos`, y hace altas idempotentes (`ON CONFLICT (id) DO UPDATE`). `main.py` lanza `sistema.indexar` como proceso aparte con baja prioridad, sin bloquear el latido ni el worker. `rag._Retriever` usa `indice_pg.buscar` (distancia coseno `<=>` con `statement_timeout`) cuando hay `POSTGRES_DSN` y el índice responde; si falla o no hay filas, cae al índice en memoria. La búsqueda híbrida BM25 + vectorial con RRF (`_rrf`) se mantiene. No está conectado a `coordinador.py`: el flujo de notas no consulta RAG. Los límites, el stock y el catálogo de tareas no salen de RAG: se consultan por API, SQL o YAML. DIM = 4096; pgvector no permite índices HNSW/IVFFlat por encima de 2000 dimensiones, así que la búsqueda es exacta (sin índice), válida para ~700 fragmentos.
 
 **Alternativas:** dejar solo el índice en memoria; instalar un modelo de embeddings externo; indexar de forma sincrónica en el arranque.
 
-**Por qué:** pgvector ya está en la imagen de Postgres y da persistencia sin agregar un servicio; el hashing evita otra dependencia de modelo y mantiene la dimensión fija. Indexar en un hilo aparte conserva el arranque y el latido.
+**Por qué:** pgvector ya está en la imagen de Postgres y da persistencia sin agregar un servicio; el hashing evita otra dependencia de modelo y mantiene la dimensión fija. Indexar en un proceso aparte conserva el arranque y el latido.
 
 **Consecuencias:** medición offline sobre 701 fragmentos y 71 preguntas: hit@5 0,831 (base BM25 0,850) y recall@5 0,702 (base 0,660); Rev. C antes que D: 0/71 por el filtro `vigente`. `manuales_buscar` ahora filtra por metadatos (tipo, doc, vigente) e id de sección dedicada; está expuesto en el servidor MCP `mcp_server.py`. El chunking y el reranking quedan pendientes y declarados.
 
@@ -221,3 +221,31 @@ El primer paso es un servicio `agente` que se conecta al broker, valida los mens
 **Por qué:** el contrato no admite `tag` nulo y no se modifica. El build limpio es lo que va a ejecutar el corrector. Un prompt con frases de escenario sería sobreajuste a la corrección.
 
 **Consecuencias:** el repositorio no contiene `Dockerfile.a-test` ni imágenes locales, y `.gitignore` excluye corridas y volcados. El `PROMPT` es parte del código fuente y viaja con el repositorio.
+
+## D20. Registro de decisiones
+
+**Decisión:** cada paso relevante de una orden se registra en la tabla `decisiones`. La correlación del flujo es `correlation_id = evento.id`; para órdenes ya persistidas se usa `evento_ids[0]` y, como último recurso, `orden.id`. El registro es fail-open: si no hay repositorio o falla la escritura, se loguea y el flujo continúa.
+
+| Columna | Contenido |
+|---|---|
+| `id` | UUIDv5 determinista por `correlation_id`, `paso`, secuencia y timestamp |
+| `correlation_id` | `evento.id` en el flujo de órdenes |
+| `tarea` | tarea opcional asociada al paso |
+| `paso` | etapa registrada: `causas_probables`, `evaluar`, `analisis_llm`, `validar_orden_publicable`, `deadline`, `loop`, `tool_timeout`, `tool:<nombre>`, etc. |
+| `modelo` | `reglas`, `humano`, `control` o el modelo LLM configurado |
+| `herramienta` | herramienta o código de error, cuando aplica |
+| `argumentos` | JSONB con argumentos permitidos, resultado y metadatos acotados |
+| `tokens` | tokens del LLM; 0 en pasos deterministas |
+| `costo_usd` | costo calculado con tarifas configuradas; 0 en pasos deterministas |
+| `duracion_ms` | duración real del paso |
+| `creado_ts` | timestamp UTC; sirve para ordenar dentro de cada correlación |
+
+**Retención:** no hay TTL, `DELETE`, `TRUNCATE` ni poda automática de `decisiones`. En Postgres persiste mientras exista el volumen `pgdata`; en `RegistroDecisionesMemoria` vive solo durante el proceso. Los textos libres se acotan: búsqueda de manuales guarda longitud y hash, decisiones humanas guardan longitudes y monto, y las justificaciones del LLM se recortan a 500 caracteres.
+
+**Allowlist de `argumentos`:** la columna es JSONB libre a nivel de esquema, pero los productores aplican listas explícitas. `historian` guarda `tag`, `variable`, `desde`, `hasta`; `catalogo` y `stock` guardan `tag`; `historial_ordenes` guarda `equipo`, `orden_id`; los intentos de herramienta agregan `resultado`, `intento` y `codigo`. Las dos lecturas de materiales se distinguen con `fuente="tareas_no_estandar"` y `fuente="_cargar_materiales"`. La CLI no guarda nombres ni motivos, solo longitudes y monto.
+
+**Modelos:** `reglas` es el default de los pasos deterministas; `humano` se usa para `aprobar`, `rechazar`, `certificar` y `observar`; `control` se usa para `deadline`, `loop`, `tool_timeout` y cada intento de herramienta. Un `analisis_llm` deshabilitado también se registra con `modelo="reglas"`.
+
+**Por qué:** la auditoría tiene que explicar qué se decidió y cuánto costó, sin permitir que la traza altere la decisión ni que un fallo de observabilidad detenga la orden.
+
+**Consecuencias:** las consultas se hacen por `correlation_id`, ordenadas por `creado_ts`. La detección de loops usa esas mismas filas, excluyendo `deadline`, `loop` y `tool_timeout` de la cuenta.
