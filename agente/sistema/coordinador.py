@@ -216,9 +216,15 @@ class CoordinadorPartes:
             self._cliente.publicar(Topicos.EVENTOS, evento)
             if self._pendientes is not None:
                 self._pendientes.agregar(f"evento:{evento.id}")
-        self._cliente.publicar(Topicos.TABLET, mensaje_seguridad(nota, detecciones))
 
-        items = items_seguridad(detecciones)
+        equipo = self._catalogo.buscar_tag(texto)
+        foto_url = nota.fotos[0] if nota.fotos else None
+        self._cliente.publicar(
+            Topicos.TABLET,
+            mensaje_seguridad(nota, detecciones, equipo=equipo, foto_url=foto_url),
+        )
+
+        items = items_seguridad(detecciones, equipo=equipo, foto_url=foto_url)
         mensaje = borrador(
             nota,
             items,

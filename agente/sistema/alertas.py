@@ -41,7 +41,10 @@ def eventos_seguridad(
 
 
 def mensaje_seguridad(
-    nota: NotaRecorrida, detecciones: list[Deteccion]
+    nota: NotaRecorrida,
+    detecciones: list[Deteccion],
+    equipo: str | None = None,
+    foto_url: str | None = None,
 ) -> MensajeTablet:
     procedimientos = " ".join(
         PROCEDIMIENTOS.get(deteccion.categoria, FALLBACK) for deteccion in detecciones
@@ -49,6 +52,8 @@ def mensaje_seguridad(
     detalle = "; ".join(
         f"{deteccion.categoria}: {deteccion.evidencia}" for deteccion in detecciones
     )
+    if foto_url:
+        detalle = f"{detalle}; foto: {foto_url}"
     return MensajeTablet(
         id=_id(nota.id, "tablet-seguridad"),
         ts=nota.ts,
@@ -58,7 +63,7 @@ def mensaje_seguridad(
             titulo="Alerta de seguridad",
             filas=[
                 FilaParte(
-                    tag="PLANTA",
+                    tag=equipo or "PLANTA",
                     variable="condicion_insegura",
                     valor=None,
                     observacion=detalle,

@@ -65,3 +65,23 @@ docker compose exec agente python -m sistema.cli aprobar ORDEN_ID --por NOMBRE
   escalan. La fila `condicion_insegura` no coincide con las firmas de `FALLAS` y
   la foto de daño estructural no se analiza: no hay tarea derivable y no se
   inventa ninguna. No aplica `MBP-4 §17.1` porque es una sección de PIA-1.
+
+## Límite del corrector en A2/A3
+
+El corrector oficial no puede confirmar notas cuyo único contenido es una fila de
+estado o de seguridad: `planta_sim/dialogo.py` calcula `filas_mostradas` contando
+solo filas con `valor != None`, y `confirmo` se setea comparando únicamente los
+ítems de la verdad con `valor != None`. Las filas `estado` y `condicion_insegura`
+tienen `valor=None` por contrato, así que `SIN-EQUIPO`/`PLANTA`/`B-101` con valor
+nulo no cuentan como borrador y no se confirman.
+
+Evidencia reproducible con `dialogo.responder` sobre NOTA-00008:
+
+- `B-103/estado/valor=None` → `filas_mostradas=0`, `problemas=[sin_borrador]`.
+- `B-103/estado/valor=0.0` → `filas_mostradas=1`, pero `confirmo=False` por
+  `sobra` (“Lo de la tres no lo dije”).
+
+Por eso #23 corrige la presentación (tag y URL de la foto en `observacion`) pero
+no puede subir A2/A3 con este corrector. El hallazgo se reporta al curso: para
+que estas notas cuenten, el corrector debería aceptar filas con `valor=None`
+comparando `tag`, `variable` y `observacion`/`foto`.

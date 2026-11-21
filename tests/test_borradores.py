@@ -60,9 +60,24 @@ class TestBorradores(unittest.TestCase):
             evidencia = "agua a presion"
 
         items = items_seguridad([Deteccion()])
+        self.assertEqual(items[0].tag, "PLANTA")
         self.assertEqual(items[0].variable, "condicion_insegura")
         self.assertIsNone(items[0].valor)
         self.assertIn("S1", items[0].observacion)
+
+    def test_seguridad_puede_mostrar_equipo_y_foto_resueltos(self):
+        class Deteccion:
+            categoria = "S1"
+            evidencia = "agua a presion"
+
+        items = items_seguridad(
+            [Deteccion()],
+            equipo="B-101",
+            foto_url="/media/fotos/rotura_descarga/04.jpg",
+        )
+        self.assertEqual(items[0].tag, "B-101")
+        self.assertIsNone(items[0].valor)
+        self.assertIn("/media/fotos/rotura_descarga/04.jpg", items[0].observacion)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ from planta_contrato import (
     Topicos,
 )
 
-from sistema.catalogo import CatalogoPlanta
+from sistema.catalogo import CatalogoPlanta, Equipo
 from sistema.coordinador import CoordinadorPartes
 from sistema.heartbeat import ColaPendientes
 from sistema.repositorio import RepositorioMemoria
@@ -211,6 +211,78 @@ class TestCoordinador(unittest.TestCase):
         self.assertFalse(orden.detiene_equipo)
         self.assertFalse(orden.reduce_inyeccion)
         self.assertEqual(orden.repuestos, [])
+
+    def test_nota_seguridad_muestra_b101_y_foto_en_aviso_y_borrador(self):
+        texto = (
+            "¡Atención! Se rompió algo en la descarga de la uno, sale agua a "
+            "presión para todos lados, me alejé. Saqué foto desde lejos."
+        )
+        nota_seguridad = nota("NOTA-00001").model_copy(
+            update={"fotos": ["/media/fotos/rotura_descarga/04.jpg"]}
+        )
+        detecciones = [Deteccion("S1", "agua a presion")]
+
+        self.coordinador.procesar_nota(nota_seguridad, texto, detecciones)
+
+        tablet = self.tablet()
+        self.assertEqual(len(tablet), 2)
+        for mensaje in tablet:
+            fila = mensaje.pantalla.filas[0]
+            self.assertEqual(fila.tag, "B-101")
+            self.assertEqual(fila.variable, "condicion_insegura")
+            self.assertIsNone(fila.valor)
+            self.assertIn("/media/fotos/rotura_descarga/04.jpg", fila.observacion)
+
+        publicados = self.cliente.publicados
+        indice_alerta = next(
+            i
+            for i, (topico, modelo) in enumerate(publicados)
+            if topico == Topicos.EVENTOS and modelo.tipo.value == "AlertaSeguridad"
+        )
+        indices_tablet = [
+            i for i, (topico, _) in enumerate(publicados) if topico == Topicos.TABLET
+        ]
+        self.assertLess(indice_alerta, indices_tablet[0])
+        self.assertLess(indice_alerta, indices_tablet[1])
+
+    def test_nota_seguridad_sin_equipo_resuelto_mantiene_planta(self):
+        texto = (
+            "¡Atención! Se rompió algo en la descarga, sale agua a presión, "
+            "me alejé. Saqué foto desde lejos."
+        )
+        nota_seguridad = nota("NOTA-00001").model_copy(
+            update={"fotos": ["/media/fotos/rotura_descarga/04.jpg"]}
+        )
+        detecciones = [Deteccion("S1", "agua a presion")]
+
+        self.coordinador.procesar_nota(nota_seguridad, texto, detecciones)
+
+        tablet = self.tablet()
+        self.assertEqual(len(tablet), 2)
+        for mensaje in tablet:
+            self.assertEqual(mensaje.pantalla.filas[0].tag, "PLANTA")
+
+    def test_parada_en_reserva_resuelta_no_inventa_valor(self):
+        self.catalogo.equipos.append(Equipo("B-103", "bomba", ("la tres",)))
+        texto = "La bomba está parada, en reserva."
+        self.coordinador.procesar_nota(nota(), texto, [])
+        pregunta = self.tablet()[0]
+        self.assertEqual(pregunta.pantalla.filas[0].tag, "SIN-EQUIPO")
+
+        self.coordinador.encolar_respuesta(respuesta(pregunta.id, "Era la tres."))
+        self.esperar_estado("NOTA-00010", "BORRADOR")
+        fin = time.time() + 1.0
+        while len(self.tablet()) < 2 and time.time() < fin:
+            time.sleep(0.01)
+
+        fila = self.tablet()[-1].pantalla.filas[0]
+        self.assertEqual(fila.tag, "B-103")
+        self.assertEqual(fila.variable, "estado")
+        self.assertIsNone(fila.valor)
+        self.assertEqual(fila.observacion, "parada, en reserva")
+        self.assertFalse(
+            any(evento.tipo.value == "Escalado" for evento in self.eventos())
+        )
 
     def test_pendientes_durante_corte_se_limpian_sin_republicar(self):
         cola = ColaPendientes()

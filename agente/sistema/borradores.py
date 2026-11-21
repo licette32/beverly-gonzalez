@@ -63,13 +63,17 @@ def pregunta(
     )
 
 
-def items_seguridad(detecciones) -> list[ItemParte]:
+def items_seguridad(
+    detecciones, equipo: str | None = None, foto_url: str | None = None
+) -> list[ItemParte]:
     detalle = "; ".join(
         f"{deteccion.categoria}: {deteccion.evidencia}" for deteccion in detecciones
     )
+    if foto_url:
+        detalle = f"{detalle}; foto: {foto_url}"
     return [
         ItemParte(
-            tag="PLANTA",
+            tag=equipo or "PLANTA",
             variable="condicion_insegura",
             valor=None,
             unidad=None,

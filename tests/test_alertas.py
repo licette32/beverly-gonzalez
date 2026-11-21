@@ -42,8 +42,25 @@ class TestAlertas(unittest.TestCase):
         self.assertFalse(mensaje.espera_respuesta)
         self.assertIn("supervisor", mensaje.texto)
         fila = mensaje.pantalla.filas[0]
+        self.assertEqual(fila.tag, "PLANTA")
         self.assertEqual(fila.variable, "condicion_insegura")
         self.assertIsNone(fila.valor)
+
+    def test_mensaje_puede_mostrar_equipo_y_foto_resueltos(self):
+        nota = self.nota.model_copy(
+            update={"fotos": ["/media/fotos/rotura_descarga/04.jpg"]}
+        )
+        mensaje = mensaje_seguridad(
+            nota,
+            self.detecciones,
+            equipo="B-101",
+            foto_url="/media/fotos/rotura_descarga/04.jpg",
+        )
+        fila = mensaje.pantalla.filas[0]
+        self.assertEqual(fila.tag, "B-101")
+        self.assertEqual(fila.variable, "condicion_insegura")
+        self.assertIsNone(fila.valor)
+        self.assertIn("/media/fotos/rotura_descarga/04.jpg", fila.observacion)
 
     def test_ids_son_estables_para_la_misma_nota(self):
         eventos_1 = eventos_seguridad(self.nota, self.detecciones)
