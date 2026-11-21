@@ -16,8 +16,11 @@ def tearDownModule():
 from planta_contrato import EstadoOrden
 from test_ordenes import evento_sensor
 
+from sistema import flujo as modulo_flujo
 from sistema.causas import Anomalia, Causa, EvidenciaEquipo, causas_probables
+from sistema.control_flujo import ControlProceso
 from sistema.flujo import CatalogoTools, procesar
+from sistema.repositorio_decisiones import RegistroDecisionesMemoria
 from sistema.tools import StockItem, tareas_catalogo
 
 TZ = timezone(timedelta(hours=-3))
@@ -115,6 +118,7 @@ class TestRevisionPublicacion(ConCitas):
         verificar=True,
         fragmentos=None,
         ejecutor="propio",
+        registro=None,
     ):
         tareas = [
             {
@@ -144,7 +148,13 @@ class TestRevisionPublicacion(ConCitas):
         ), patch(
             "sistema.flujo.tools._cargar_materiales", return_value=datos_materiales
         ):
-            return procesar(evento_sensor("B-101"), evidencia("B-101"), [], catalogo)
+            return procesar(
+                evento_sensor("B-101"),
+                evidencia("B-101"),
+                [],
+                catalogo,
+                registro=registro,
+            )
 
     def test_cita_valida_y_repuesto_en_lista_aprueba(self):
         resultado = self._procesar(
@@ -477,3 +487,112 @@ class TestFlujo(ConCitas):
 
         self.assertIsNotNone(primero.orden)
         self.assertEqual(primero.orden.id, segundo.orden.id)
+
+
+class TestControlFlujo(TestRevisionPublicacion):
+    def test_deadline_antes_de_construir_devuelve_sin_orden(self):
+        control = ControlProceso("EV-CTRL", None, limite_s=0)
+        with patch("sistema.flujo.ControlProceso", return_value=control):
+            resultado = self._procesar()
+
+        self.assertIsNone(resultado.orden)
+        self.assertEqual(resultado.problemas, ("LIMITE_TIEMPO",))
+
+    def test_deadline_despues_de_construir_deja_pendiente_sin_publicar(self):
+        estado = {"listo": False}
+        real = modulo_flujo.construir_orden
+
+        def construir(*args, **kwargs):
+            estado["listo"] = True
+            return real(*args, **kwargs)
+
+        class ControlTemporizado(ControlProceso):
+            def transcurrido_s(self):
+                return 601 if estado["listo"] else 0
+
+        control = ControlTemporizado("EV-CTRL", None, limite_s=600)
+        with patch("sistema.flujo.ControlProceso", return_value=control), patch(
+            "sistema.flujo.construir_orden", side_effect=construir
+        ):
+            resultado = self._procesar()
+
+        self.assertIsNotNone(resultado.orden)
+        self.assertIs(resultado.orden.estado, EstadoOrden.pendiente)
+        self.assertIn("LIMITE_TIEMPO", resultado.orden.motivo)
+        self.assertIn("LIMITE_TIEMPO", resultado.problemas)
+
+    def test_loop_antes_de_construir_devuelve_sin_orden(self):
+        correlation_id = evento_sensor("B-101").id
+        registro = RegistroDecisionesMemoria()
+        for _ in range(3):
+            registro.registrar(
+                correlation_id=correlation_id,
+                paso="causas_probables",
+                modelo="reglas",
+            )
+        control = ControlProceso(correlation_id, registro)
+        with patch("sistema.flujo.ControlProceso", return_value=control):
+            resultado = self._procesar(registro=registro)
+
+        self.assertIsNone(resultado.orden)
+        self.assertEqual(resultado.problemas, ("LOOP_DETECTADO",))
+        self.assertTrue(
+            any(fila.paso == "loop" for fila in registro.listar(correlation_id))
+        )
+
+    def test_loop_despues_de_construir_deja_pendiente(self):
+        correlation_id = evento_sensor("B-101").id
+        registro = RegistroDecisionesMemoria()
+        for _ in range(3):
+            registro.registrar(
+                correlation_id=correlation_id,
+                paso="construir_orden",
+                modelo="reglas",
+            )
+        control = ControlProceso(correlation_id, registro)
+        with patch("sistema.flujo.ControlProceso", return_value=control):
+            resultado = self._procesar(registro=registro)
+
+        self.assertIsNotNone(resultado.orden)
+        self.assertIs(resultado.orden.estado, EstadoOrden.pendiente)
+        self.assertIn("LOOP_DETECTADO", resultado.orden.motivo)
+        self.assertIn("LOOP_DETECTADO", resultado.pendiente_por)
+
+    def test_pasos_de_control_no_cuentan_como_loop(self):
+        correlation_id = "EV-CTRL"
+        registro = RegistroDecisionesMemoria()
+        argumentos = {
+            "limite_s": 600,
+            "transcurrido_s": 600.0,
+            "etapa": "inicio",
+        }
+        for paso in ("deadline", "loop", "tool_timeout"):
+            for _ in range(3):
+                registro.registrar(
+                    correlation_id=correlation_id,
+                    paso=paso,
+                    modelo="control",
+                    argumentos=argumentos,
+                )
+        control = ControlProceso(correlation_id, registro)
+        for paso in ("deadline", "loop", "tool_timeout"):
+            self.assertFalse(control.detectar_loop(paso, None, argumentos))
+        self.assertEqual(len(registro.listar(correlation_id)), 9)
+
+    def test_argumentos_distingue_las_dos_llamadas_de_materiales(self):
+        correlation_id = evento_sensor("B-101").id
+        registro = RegistroDecisionesMemoria()
+        self._procesar(registro=registro)
+
+        filas = [
+            fila
+            for fila in registro.listar(correlation_id)
+            if fila.paso == "materiales"
+        ]
+        self.assertEqual(
+            {(fila.herramienta, fila.argumentos["fuente"]) for fila in filas},
+            {
+                ("materiales", "tareas_no_estandar"),
+                ("materiales", "_cargar_materiales"),
+            },
+        )

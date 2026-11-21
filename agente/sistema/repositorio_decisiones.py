@@ -23,6 +23,7 @@ NAMESPACE = uuid.NAMESPACE_URL
 MODELO_REGLAS = "reglas"
 MODELO_HUMANO = "humano"
 MODELO_WHISPER = "whisper-base-int8"
+MODELO_CONTROL = "control"
 
 T = TypeVar("T")
 
@@ -452,15 +453,17 @@ def registrar_herramienta(
     argumentos: Mapping[str, Any],
     fn: Callable[..., T],
     *args: Any,
+    paso: str | None = None,
+    herramienta: str | None = None,
     **kwargs: Any,
 ) -> T:
     return medir_y_registrar(
         registro,
         correlation_id,
-        nombre,
+        paso or nombre,
         fn,
         *args,
-        herramienta=nombre,
+        herramienta=herramienta or nombre,
         argumentos=argumentos,
         **kwargs,
     )

@@ -7,6 +7,7 @@ import sys
 import time
 
 from sistema.config import MQTT_HOST, MQTT_PORT, POSTGRES_DSN, SISTEMA
+from sistema.control_flujo import ControlProceso
 from sistema.mqtt import ClienteMQTT
 from sistema.ordenes import ErrorEstadoEsperado, publicar_orden
 from sistema.repositorio_cierres import RepositorioCierresPostgres
@@ -123,6 +124,7 @@ def main(
             print(f"orden {args.orden_id} no encontrada", file=sys.stderr)
             return 1
         correlation_id = correlation_de_orden(leida)
+        control = ControlProceso(correlation_id, registro)
 
         try:
             nueva = transicionar(
@@ -132,6 +134,9 @@ def main(
                 habilita=getattr(args, "habilita", None),
                 monto_habilita_usd=getattr(args, "monto", None),
             )
+            if control.verificar("cli:publicar"):
+                print("se agotó el tiempo antes de publicar", file=sys.stderr)
+                return 1
             publicada = publicar_orden(
                 nueva,
                 None,

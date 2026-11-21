@@ -115,6 +115,14 @@ class CorteWorkerTest(unittest.TestCase):
         self.assertEqual(a.id, b.id)
         self.assertNotEqual(a.id, c.id)
 
+    def test_nuevos_motivos_de_corte(self):
+        for motivo in ("deadline", "api", "loop"):
+            with self.subTest(motivo=motivo):
+                mensaje = mensaje_corte(nota("NOTA-00099"), motivo)
+                self.assertIsInstance(mensaje, MensajeTablet)
+                self.assertEqual(mensaje.nota_ids, ["NOTA-00099"])
+                self.assertTrue(mensaje.texto)
+
 
 class LimiteCorreccionesTest(unittest.TestCase):
     def setUp(self):

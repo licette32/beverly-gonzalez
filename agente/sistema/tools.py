@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, List, Literal, Optional
@@ -18,6 +20,7 @@ MATERIALES_PATH = os.path.join(os.path.dirname(__file__), "..", "datos", "materi
 
 from .config import (
     CATALOGO_TIMEOUT_S,
+    ESPERA_REINTENTO_TOOL_S,
     HISTORIAL_TIMEOUT_S,
     HISTORIAN_TIMEOUT_S,
     MANUALES_DOCS,
@@ -26,6 +29,16 @@ from .config import (
     MANUALES_TIMEOUT_S,
     MANUALES_TIPOS,
     PREGUNTA_TIMEOUT_S,
+    REINTENTOS_TOOL_LECTURA,
+)
+from .repositorio_decisiones import (
+    MODELO_CONTROL,
+    RegistroDecisiones,
+    argumentos_catalogo,
+    argumentos_historial_ordenes,
+    argumentos_historian,
+    argumentos_manuales_buscar,
+    registrar_directo,
 )
 
 
@@ -37,6 +50,47 @@ class ErrorInfo(Exception):
         self.codigo = codigo
         self.mensaje = mensaje
         self.reintentable = reintentable
+
+
+def _clasificar_error(exc: Exception) -> tuple[str, bool]:
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"API_HTTP_{exc.code}", 500 <= exc.code < 600
+    if isinstance(exc, json.JSONDecodeError):
+        return "API_PARSE", False
+    if isinstance(exc, TimeoutError):
+        return "API_TIMEOUT", True
+    if isinstance(exc, ConnectionError):
+        return "API_CONEXION", True
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        if isinstance(reason, TimeoutError):
+            return "API_TIMEOUT", True
+        return "API_CONEXION", True
+    return "API_ERROR", False
+
+
+def _registrar_intento(
+    nombre: str,
+    registro: RegistroDecisiones | None,
+    correlation_id: str | None,
+    argumentos: Any,
+    resultado: str,
+    intento: int,
+    codigo: str | None = None,
+) -> None:
+    datos = dict(argumentos or {})
+    datos["resultado"] = resultado
+    datos["intento"] = intento
+    if codigo is not None:
+        datos["codigo"] = codigo
+    registrar_directo(
+        registro,
+        correlation_id=correlation_id or nombre,
+        paso=f"tool:{nombre}",
+        modelo=MODELO_CONTROL,
+        herramienta=nombre,
+        argumentos=datos,
+    )
 
 
 class HistorianRequest(BaseModel):
@@ -126,19 +180,60 @@ def _opener(timeout: float):
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def _fetch(url: str, timeout: float) -> dict[str, Any]:
-    try:
-        with _opener(timeout).open(url, timeout=timeout) as respuesta:
-            return json.load(respuesta)
-    except Exception as exc:
-        raise ErrorInfo(codigo="API_ERROR", mensaje=str(exc), reintentable=True)
+def _fetch(
+    url: str,
+    timeout: float,
+    *,
+    nombre: str = "api",
+    registro: RegistroDecisiones | None = None,
+    correlation_id: str | None = None,
+    argumentos: Any = None,
+) -> dict[str, Any]:
+    intentos = max(1, REINTENTOS_TOOL_LECTURA)
+    for intento in range(1, intentos + 1):
+        try:
+            with _opener(timeout).open(url, timeout=timeout) as respuesta:
+                datos = json.load(respuesta)
+            _registrar_intento(
+                nombre, registro, correlation_id, argumentos, "ok", intento
+            )
+            return datos
+        except Exception as exc:
+            codigo, reintentable = _clasificar_error(exc)
+            if reintentable and intento < intentos:
+                _registrar_intento(
+                    nombre, registro, correlation_id, argumentos, "reintento", intento, codigo
+                )
+                if ESPERA_REINTENTO_TOOL_S > 0:
+                    time.sleep(ESPERA_REINTENTO_TOOL_S)
+                continue
+            _registrar_intento(
+                nombre, registro, correlation_id, argumentos, "error", intento, codigo
+            )
+            raise ErrorInfo(codigo=codigo, mensaje=str(exc), reintentable=False) from exc
+    raise ErrorInfo(codigo="API_ERROR", mensaje="sin intentos", reintentable=False)
 
 
-def historian(tag: str, variable: str, desde: str | None = None, hasta: str | None = None) -> HistorianResponse:
+def historian(
+    tag: str,
+    variable: str,
+    desde: str | None = None,
+    hasta: str | None = None,
+    *,
+    registro: RegistroDecisiones | None = None,
+    correlation_id: str | None = None,
+) -> HistorianResponse:
     query = urllib.parse.urlencode({"desde": desde or "", "hasta": hasta or ""})
     url = _url(f"/api/historian/{tag}/{variable}?{query}")
     try:
-        data = _fetch(url, HISTORIAN_TIMEOUT_S)
+        data = _fetch(
+            url,
+            HISTORIAN_TIMEOUT_S,
+            nombre="historian",
+            registro=registro,
+            correlation_id=correlation_id,
+            argumentos=argumentos_historian(tag, variable, desde, hasta),
+        )
         valores = [fila["valor"] for fila in data if fila.get("valor") is not None]
         return HistorianResponse(
             tag=tag,
@@ -150,13 +245,25 @@ def historian(tag: str, variable: str, desde: str | None = None, hasta: str | No
     except ErrorInfo:
         raise
     except Exception as exc:
-        raise ErrorInfo(codigo="HISTORIAN_ERROR", mensaje=str(exc), reintentable=True)
+        raise ErrorInfo(codigo="HISTORIAN_ERROR", mensaje=str(exc), reintentable=False) from exc
 
 
-def catalogo(tag: str | None = None) -> CatalogoResponse:
+def catalogo(
+    tag: str | None = None,
+    *,
+    registro: RegistroDecisiones | None = None,
+    correlation_id: str | None = None,
+) -> CatalogoResponse:
     url = _url("/api/planta")
     try:
-        data = _fetch(url, CATALOGO_TIMEOUT_S)
+        data = _fetch(
+            url,
+            CATALOGO_TIMEOUT_S,
+            nombre="catalogo",
+            registro=registro,
+            correlation_id=correlation_id,
+            argumentos=argumentos_catalogo(tag),
+        )
         equipos = data.get("equipos", [])
         if tag:
             equipos = [e for e in equipos if e.get("tag") == tag]
@@ -164,10 +271,16 @@ def catalogo(tag: str | None = None) -> CatalogoResponse:
     except ErrorInfo:
         raise
     except Exception as exc:
-        raise ErrorInfo(codigo="CATALOGO_ERROR", mensaje=str(exc), reintentable=True)
+        raise ErrorInfo(codigo="CATALOGO_ERROR", mensaje=str(exc), reintentable=False) from exc
 
 
-def historial_ordenes(equipo: str, orden_id: str | None = None) -> HistorialOrdenesResponse:
+def historial_ordenes(
+    equipo: str,
+    orden_id: str | None = None,
+    *,
+    registro: RegistroDecisiones | None = None,
+    correlation_id: str | None = None,
+) -> HistorialOrdenesResponse:
     """Órdenes históricas de un equipo; el filtro por id se hace localmente.
 
     La API de la planta devuelve la lista de órdenes del archivo más las del
@@ -177,16 +290,25 @@ def historial_ordenes(equipo: str, orden_id: str | None = None) -> HistorialOrde
     query = urllib.parse.urlencode({"equipo": equipo})
     url = _url(f"/api/historial-ordenes?{query}")
     try:
-        data = _fetch(url, HISTORIAL_TIMEOUT_S)
+        data = _fetch(
+            url,
+            HISTORIAL_TIMEOUT_S,
+            nombre="historial_ordenes",
+            registro=registro,
+            correlation_id=correlation_id,
+            argumentos=argumentos_historial_ordenes(equipo, orden_id),
+        )
         ordenes = data if isinstance(data, list) else data.get("ordenes", [])
         if not isinstance(ordenes, list):
             ordenes = []
         if orden_id:
             ordenes = [o for o in ordenes if isinstance(o, dict) and o.get("id") == orden_id]
         return HistorialOrdenesResponse.model_validate({"ordenes": ordenes})
+    except ErrorInfo:
+        raise
     except Exception as exc:
         raise ErrorInfo(
-            codigo="HISTORIAL_ORDENES_ERROR", mensaje=str(exc), reintentable=True
+            codigo="HISTORIAL_ORDENES_ERROR", mensaje=str(exc), reintentable=False
         ) from exc
 
 
@@ -379,20 +501,45 @@ def _manuales_una_vez(texto: str) -> List[ManualEncontrado]:
     return encontrados
 
 
-def manuales_buscar(texto: str) -> List[ManualEncontrado]:
-    """Busca en manuales vigentes de PIA-3, con timeout y un reintento.
-
-    Devuelve lista vacía para consulta vacía o sin resultados. Ante timeout o
-    fallo de búsqueda levanta ErrorInfo reintentable, igual que las demás tools.
-    """
+def manuales_buscar(
+    texto: str,
+    *,
+    registro: RegistroDecisiones | None = None,
+    correlation_id: str | None = None,
+) -> List[ManualEncontrado]:
+    """Busca en manuales vigentes de PIA-3, con timeout y un reintento."""
     if not texto or not texto.strip():
         return []
-    ultimo: ErrorInfo | None = None
-    for intento in range(2):
+    base = argumentos_manuales_buscar(texto)
+    for intento in range(1, 3):
         try:
-            return _manuales_una_vez(texto)
+            encontrados = _manuales_una_vez(texto)
         except ErrorInfo as exc:
-            ultimo = exc
-            if not exc.reintentable or intento == 1:
-                raise
-    raise ultimo  # pragma: no cover
+            if intento == 1 and exc.reintentable:
+                _registrar_intento(
+                    "manuales_buscar",
+                    registro,
+                    correlation_id,
+                    base,
+                    "reintento",
+                    intento,
+                    exc.codigo,
+                )
+                continue
+            _registrar_intento(
+                "manuales_buscar",
+                registro,
+                correlation_id,
+                base,
+                "error",
+                intento,
+                exc.codigo,
+            )
+            raise ErrorInfo(
+                codigo=exc.codigo, mensaje=exc.mensaje, reintentable=False
+            ) from exc
+        _registrar_intento(
+            "manuales_buscar", registro, correlation_id, base, "ok", intento
+        )
+        return encontrados
+    raise ErrorInfo(codigo="MANUALES_ERROR", mensaje="sin intentos", reintentable=False)

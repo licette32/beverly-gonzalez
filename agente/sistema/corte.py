@@ -21,6 +21,9 @@ TEXTOS = {
     "correcciones": (
         "Llegamos al máximo de correcciones para esta nota. Revisá el parte a mano."
     ),
+    "deadline": "Se agotó el tiempo de procesamiento. Revisá la nota a mano.",
+    "api": "No pude consultar los datos de planta. Revisá la nota a mano.",
+    "loop": "El procesamiento se repitió demasiadas veces. Revisá la nota a mano.",
 }
 
 

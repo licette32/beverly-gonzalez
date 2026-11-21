@@ -1,6 +1,7 @@
 import tempfile
 import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import json
@@ -9,6 +10,7 @@ from pydantic import ValidationError
 
 from sistema.config import MANUALES_TEXTO_MAX
 from sistema.indexado import Fragmento
+from sistema.repositorio_decisiones import RegistroDecisionesMemoria
 from sistema.tools import (
     ErrorInfo,
     HistorianRequest,
@@ -101,12 +103,12 @@ class TestToolsFunctions(unittest.TestCase):
         self.assertEqual(result.valores, [1.0, 2.0, 3.0])
 
     @patch("sistema.tools._fetch")
-    def test_historian_retryable_error(self, mock_fetch):
+    def test_historian_error_final_no_reintentable(self, mock_fetch):
         mock_fetch.side_effect = Exception("connection refused")
         with patch("sistema.tools.PLANTA_BASE_URL", "http://sim:8100"):
             with self.assertRaises(ErrorInfo) as ctx:
                 historian("B-101", "presion_descarga_local")
-        self.assertTrue(ctx.exception.reintentable)
+        self.assertFalse(ctx.exception.reintentable)
         self.assertEqual(ctx.exception.codigo, "HISTORIAN_ERROR")
 
     @patch("sistema.tools._fetch")
@@ -124,6 +126,57 @@ class TestToolsFunctions(unittest.TestCase):
         with patch("sistema.tools.PLANTA_BASE_URL", "http://sim:8100"):
             result = catalogo()
         self.assertEqual(len(result.equipos), 2)
+
+    def test_historian_timeout_reintenta_dos_veces_y_registra(self):
+        registro = RegistroDecisionesMemoria()
+        opener = MagicMock()
+        opener.open.side_effect = urllib.error.URLError(TimeoutError("lento"))
+        with patch("sistema.tools._opener", return_value=opener), patch(
+            "sistema.tools.time.sleep"
+        ) as dormir, patch("sistema.tools.PLANTA_BASE_URL", "http://sim:8100"):
+            with self.assertRaises(ErrorInfo) as ctx:
+                historian(
+                    "B-101",
+                    "presion_descarga_local",
+                    registro=registro,
+                    correlation_id="E-TO",
+                )
+        self.assertEqual(opener.open.call_count, 2)
+        self.assertEqual(dormir.call_count, 1)
+        self.assertEqual(ctx.exception.codigo, "API_TIMEOUT")
+        self.assertFalse(ctx.exception.reintentable)
+        filas = [
+            fila for fila in registro.listar("E-TO") if fila.paso == "tool:historian"
+        ]
+        self.assertEqual(
+            [fila.argumentos["resultado"] for fila in filas], ["reintento", "error"]
+        )
+
+    def test_historian_4xx_no_reintenta(self):
+        registro = RegistroDecisionesMemoria()
+        opener = MagicMock()
+        opener.open.side_effect = urllib.error.HTTPError(
+            "http://sim:8100/api", 404, "no encontrado", {}, None
+        )
+        with patch("sistema.tools._opener", return_value=opener), patch(
+            "sistema.tools.time.sleep"
+        ) as dormir, patch("sistema.tools.PLANTA_BASE_URL", "http://sim:8100"):
+            with self.assertRaises(ErrorInfo) as ctx:
+                historian(
+                    "B-101",
+                    "presion_descarga_local",
+                    registro=registro,
+                    correlation_id="E-404",
+                )
+        self.assertEqual(opener.open.call_count, 1)
+        dormir.assert_not_called()
+        self.assertEqual(ctx.exception.codigo, "API_HTTP_404")
+        self.assertFalse(ctx.exception.reintentable)
+        filas = [
+            fila for fila in registro.listar("E-404") if fila.paso == "tool:historian"
+        ]
+        self.assertEqual([fila.argumentos["resultado"] for fila in filas], ["error"])
+
 
 class TestMateriales(unittest.TestCase):
     def _patch_materiales(self, contenido: str = MATERIALES_RECORTE):
@@ -302,28 +355,39 @@ class TestManualesBuscar(unittest.TestCase):
         with p_buscar, p_frags:
             self.assertEqual(manuales_buscar("sin coincidencias"), [])
 
-    def test_timeout_es_reintentable_y_reintenta_una_vez(self):
+    def test_timeout_reintenta_una_vez_y_termina_no_reintentable(self):
         def lento(*args, **kwargs):
             time.sleep(1.0)
             return []
 
+        registro = RegistroDecisionesMemoria()
         with patch("sistema.tools.MANUALES_TIMEOUT_S", 0.2), patch(
             "sistema.rag.buscar", side_effect=lento
         ) as buscar:
             with self.assertRaises(ErrorInfo) as ctx:
-                manuales_buscar("vibracion")
+                manuales_buscar(
+                    "vibracion", registro=registro, correlation_id="E-MAN"
+                )
         self.assertEqual(ctx.exception.codigo, "MANUALES_TIMEOUT")
-        self.assertTrue(ctx.exception.reintentable)
+        self.assertFalse(ctx.exception.reintentable)
         self.assertEqual(buscar.call_count, 2)
+        filas = [
+            fila
+            for fila in registro.listar("E-MAN")
+            if fila.paso == "tool:manuales_buscar"
+        ]
+        self.assertEqual(
+            [fila.argumentos["resultado"] for fila in filas], ["reintento", "error"]
+        )
 
-    def test_error_de_busqueda_es_reintentable(self):
+    def test_error_de_busqueda_termina_no_reintentable(self):
         with patch(
             "sistema.rag.buscar", side_effect=RuntimeError("fallo")
         ) as buscar:
             with self.assertRaises(ErrorInfo) as ctx:
                 manuales_buscar("vibracion")
         self.assertEqual(ctx.exception.codigo, "MANUALES_ERROR")
-        self.assertTrue(ctx.exception.reintentable)
+        self.assertFalse(ctx.exception.reintentable)
         self.assertEqual(buscar.call_count, 2)
 
     def test_esquema_rechaza_campos_extra(self):

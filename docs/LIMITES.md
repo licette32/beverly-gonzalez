@@ -11,6 +11,9 @@ rondas. Al llegar a un límite el agente avisa a la tablet y se detiene.
 | Pregunta de desambiguación | 60 s sin respuesta | `PREGUNTA_TIMEOUT_S` | Se publica el borrador con lo disponible y el evento B1 con lo que hay; lo no confirmado queda marcado en la observación |
 | Correcciones por nota | 5 rondas | `MAX_CORRECCIONES` | Aviso a la tablet; el parte queda como está y todavía se puede confirmar |
 | Base de datos | Reintento cada `POSTGRES_REINTENTO_S` | `POSTGRES_REINTENTO_S` | No bloquea el camino crítico; las escrituras quedan pendientes en memoria y el latido las informa |
+| Herramientas HTTP de solo lectura | 5 s por intento, 2 intentos, 0,5 s entre intentos | `HISTORIAN_TIMEOUT_S`, `CATALOGO_TIMEOUT_S`, `HISTORIAL_TIMEOUT_S`, `REINTENTOS_TOOL_LECTURA`, `ESPERA_REINTENTO_TOOL_S` | Timeout/conexión/5xx se reintentan; 4xx y errores de parseo no; cada intento se registra en `decisiones` |
+| Flujo de una orden | 600 s por orden | `FLUJO_LIMITE_S` | Antes de construir: `orden=None` y `LIMITE_TIEMPO`; después: orden pendiente guardada con `LIMITE_TIEMPO`, sin publicar en `Topicos.ORDENES` |
+| Repetición de pasos | 3 repeticiones de `(paso, herramienta, argumentos)` por `correlation_id` | `UMBRAL_LOOP_PASOS` | Se registra `paso="loop"`; la orden queda pendiente con `LOOP_DETECTADO` |
 
 ## Reglas
 
@@ -21,6 +24,17 @@ rondas. Al llegar a un límite el agente avisa a la tablet y se detiene.
   nota a mano. Es una limitación conocida.
 - Los avisos de corte tienen un id determinista por motivo y nota, así que
   repetirlos no genera duplicados.
+- La orden pendiente por deadline se guarda en `ordenes` para que el planificador
+  la retome; no se publica en `Topicos.ORDENES` ni se reprocesa.
+- El deadline del flujo y la detección de loops son cooperativos: se verifican
+  entre etapas, sin hilos que interrumpan llamadas en vuelo.
+- Un loop se decide solo por repetición de `(paso, herramienta, argumentos)`
+  dentro del mismo `correlation_id`. No se infiere de transiciones:
+  `aprobada → pendiente` no existe y `registrar_cierre` es idempotente.
+- `argumentos` distingue las dos lecturas de materiales: una viene de
+  `tareas_no_estandar` y otra de `_cargar_materiales`.
+- Los errores finales de las herramientas se registran con
+  `reintentable=False` para evitar multiplicadores de reintentos.
 - Los valores por defecto se pueden cambiar por variable de entorno en el compose.
 
 ## Límites de transiciones y CLI
@@ -32,8 +46,12 @@ rondas. Al llegar a un límite el agente avisa a la tablet y se detiene.
   cero, pero no consulta la lista de precios CT-SVP-2025.
 - `--por NOMBRE` es obligatorio y se escribe en el log de la CLI. No hay
   autenticación, autorización por rol ni bitácora persistente del operador.
-- No hay reintentos, deadlines ni bucles para cierre, certificación u órdenes de
-  la CLI. Un error se informa y se devuelve código 1.
+- La CLI no tiene timeout propio: solo consulta el deadline cooperativo antes de
+  publicar. No abre un temporizador porque opera una única orden ya cargada y
+  una interrupción en medio de la escritura dejaría un estado ambiguo.
+- La CLI no reintenta `aprobar`, `rechazar`, `certificar` ni `observar`: son
+  escrituras, y un reintento ciego podría duplicar transiciones. Un error se
+  informa y se devuelve código 1.
 - La idempotencia multi-proceso depende de `estado_esperado`: `publicar_orden`
   usa `guardar_si_estado` con `UPDATE ... WHERE id AND estado`. Sin ese valor no
   hay comparación condicional.
@@ -55,7 +73,9 @@ docker compose exec agente python -m sistema.cli aprobar ORDEN_ID --por NOMBRE
   sobrevive a un reinicio; el historial persistente es el de órdenes.
 - Si falla `/api/estado`, `estado_bombas` queda en `None`: la reserva no está
   confirmada y una tarea que detiene la bomba queda pendiente por
-  `REDUCE_INYECCION`. Si falla el historial, se sigue sin reordenar causas.
+  `REDUCE_INYECCION`. Si falla el historial con timeout o error de herramienta,
+  se avisa a la tablet y no se publica la orden; otros fallos se siguen sin
+  reordenar causas.
 - Una nota con fotos se marca `fotos_pendientes_de_analisis=True` y la orden
   queda pendiente por `FOTOS_PENDIENTES`; no hay análisis de imágenes.
 - En `fuga-sin-enlace`, la S1 de B-101 no genera orden. La nota se detecta como

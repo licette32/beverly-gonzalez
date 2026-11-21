@@ -9,6 +9,7 @@ from unittest.mock import patch
 from planta_contrato import EstadoOrden, OrdenSistema, Topicos
 
 from sistema import cli
+from sistema.repositorio_ordenes import ErrorPersistenciaOrden
 
 
 TS = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
@@ -190,6 +191,36 @@ class TestCli(unittest.TestCase):
         clase_cliente.return_value.conectar.assert_called_once_with()
         clase_cliente.return_value.publicar.assert_called_once()
         clase_cliente.return_value.cerrar.assert_called_once_with()
+
+    def test_escrituras_no_se_reintentan(self):
+        casos = (
+            ("aprobar", EstadoOrden.pendiente, "propio", ()),
+            ("rechazar", EstadoOrden.pendiente, "propio", ("--motivo", "rechazo")),
+            (
+                "certificar",
+                EstadoOrden.ejecutada,
+                "contratista",
+                ("--habilita", "HAB-2026-0001", "--monto", "100"),
+            ),
+            (
+                "observar",
+                EstadoOrden.ejecutada,
+                "contratista",
+                ("--motivo", "observacion"),
+            ),
+        )
+        error = ErrorPersistenciaOrden("publicar orden", RuntimeError("fallo"))
+        for comando, estado, ejecutor, extra in casos:
+            with self.subTest(comando=comando):
+                repositorio = RepositorioOrdenesFalso(orden(estado, ejecutor))
+                with patch("sistema.cli.publicar_orden", side_effect=error) as publicar:
+                    codigo = cli.main(
+                        [comando, "O-1", "--por", "LICETTE", *extra],
+                        repositorio=repositorio,
+                        cliente=ClienteFalso(),
+                    )
+                self.assertEqual(codigo, 1)
+                self.assertEqual(publicar.call_count, 1)
 
 
 if __name__ == "__main__":

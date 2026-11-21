@@ -15,6 +15,7 @@ from planta_contrato import EstadoOrden, EventoSistema, OrdenSistema, Repuesto
 
 from . import tools
 from .causas import Causa, EvidenciaEquipo, causas_probables
+from .control_flujo import ControlProceso
 from .historial_causas import reordenar_con_historial
 from .llm import AnalizadorLLM
 from .ordenes import construir_orden
@@ -162,6 +163,50 @@ def procesar(
 ) -> ResultadoFlujo:
     """Encadena causas, análisis opcional, orden y reglas deterministas."""
     correlation_id = evento.id
+    control = ControlProceso(correlation_id, registro)
+
+    def _sin_orden_por_control(causas: Sequence[Causa]) -> ResultadoFlujo:
+        motivo = control.motivo_control or "LIMITE_TIEMPO"
+        return ResultadoFlujo(list(causas), None, None, (motivo,), ())
+
+    def _con_orden_por_control(
+        causas: Sequence[Causa],
+        orden: Any,
+        motivos_previos: tuple[str, ...] = (),
+        problemas_previos: tuple[str, ...] = (),
+        reglas: tuple[EstadoOrden, str] | None = None,
+    ) -> ResultadoFlujo:
+        motivo_control = control.motivo_control or "LIMITE_TIEMPO"
+        motivos = _motivos_unicos(
+            *motivos_previos, *control.motivos_pendientes, motivo_control
+        )
+        problemas = tuple(problemas_previos)
+        if motivo_control == "LIMITE_TIEMPO":
+            problemas = tuple(dict.fromkeys((*problemas, motivo_control)))
+        motivo_final = "; ".join(motivos)
+        orden_control = orden.model_copy(
+            update={"estado": EstadoOrden.pendiente, "motivo": motivo_final}
+        )
+        return ResultadoFlujo(
+            list(causas),
+            orden_control,
+            reglas or (EstadoOrden.pendiente, motivo_final),
+            problemas,
+            motivos,
+        )
+
+    def _corte(
+        etapa: str,
+        *,
+        paso: str | None = None,
+        herramienta: str | None = None,
+        argumentos: Mapping[str, Any] | None = None,
+    ) -> bool:
+        if control.verificar(etapa):
+            return True
+        if paso is not None:
+            control.detectar_loop(paso, herramienta, argumentos)
+        return control.motivo_control is not None
 
     def buscar(texto: str):
         return registrar_herramienta(
@@ -171,11 +216,22 @@ def procesar(
             argumentos_manuales_buscar(texto),
             tools.manuales_buscar,
             texto,
+            registro=registro,
+            correlation_id=correlation_id,
         )
 
+    if _corte("inicio"):
+        return _sin_orden_por_control(())
     causas_base = medir_y_registrar(
         registro, correlation_id, "causas_probables", causas_probables, evidencia, buscar=buscar
     )
+    if _corte(
+        "causas_probables",
+        paso="causas_probables",
+        herramienta=None,
+        argumentos=None,
+    ):
+        return _sin_orden_por_control(causas_base)
     causas = medir_y_registrar(
         registro,
         correlation_id,
@@ -185,6 +241,13 @@ def procesar(
         historial,
         evidencia,
     )
+    if _corte(
+        "reordenar_con_historial",
+        paso="reordenar_con_historial",
+        herramienta=None,
+        argumentos=None,
+    ):
+        return _sin_orden_por_control(causas)
     if analizador is not None:
         analisis = analizador.analizar(
             evento=evento,
@@ -195,16 +258,38 @@ def procesar(
         )
         if analisis is not None:
             causas = _priorizar_causas(causas, analisis.prioridad)
+    if _corte("analisis_llm"):
+        return _sin_orden_por_control(causas)
     tareas = list(
         registrar_herramienta(
             registro, correlation_id, "tareas_catalogo", {}, catalogo.tareas_catalogo
         )
     )
+    if _corte(
+        "tareas_catalogo",
+        paso="tareas_catalogo",
+        herramienta="tareas_catalogo",
+        argumentos={},
+    ):
+        return _sin_orden_por_control(causas)
     no_estandar = list(
         registrar_herramienta(
-            registro, correlation_id, "materiales", {}, catalogo.tareas_no_estandar
+            registro,
+            correlation_id,
+            "tareas_no_estandar",
+            {"fuente": "tareas_no_estandar"},
+            catalogo.tareas_no_estandar,
+            paso="materiales",
+            herramienta="materiales",
         )
     )
+    if _corte(
+        "tareas_no_estandar",
+        paso="materiales",
+        herramienta="materiales",
+        argumentos={"fuente": "tareas_no_estandar"},
+    ):
+        return _sin_orden_por_control(causas)
     candidata = next(
         (
             causa
@@ -230,9 +315,18 @@ def procesar(
             equipo,
         )
     )
+    if _corte(
+        "stock",
+        paso="stock",
+        herramienta="stock",
+        argumentos=argumentos_stock(equipo),
+    ):
+        return _sin_orden_por_control(causas)
     if not _tarea_en_catalogo(tareas, no_estandar, tarea, equipo, stock_equipo):
         return ResultadoFlujo(causas, None, None, ("EQUIPO_SIN_CATALOGO",), ())
 
+    if _corte("construir_orden"):
+        return _sin_orden_por_control(causas)
     pedidos = _repuestos_de_tarea(tareas, no_estandar, tarea, equipo)
     orden = medir_y_registrar(
         registro,
@@ -250,6 +344,13 @@ def procesar(
         catalogo_stock=stock_equipo,
     )
 
+    if _corte(
+        "evaluar",
+        paso="construir_orden",
+        herramienta=None,
+        argumentos=None,
+    ):
+        return _con_orden_por_control(causas, orden)
     pendiente_por: tuple[str, ...] = ()
     entregados = {repuesto.codigo for repuesto in orden.repuestos}
     if any(repuesto.codigo not in entregados for repuesto in pedidos):
@@ -265,8 +366,18 @@ def procesar(
     estado, motivo = medir_y_registrar(
         registro, correlation_id, "evaluar", evaluar, orden, contexto, tarea=tarea
     )
+    if _corte(
+        "validar_orden_publicable",
+        paso="evaluar",
+        herramienta=None,
+        argumentos=None,
+    ):
+        return _con_orden_por_control(
+            causas, orden, pendiente_por, (), (estado, motivo)
+        )
     if estado == EstadoOrden.pendiente:
         pendiente_por = _motivos_unicos(*pendiente_por, motivo)
+    pendiente_por = _motivos_unicos(*pendiente_por, *control.motivos_pendientes)
 
     if pendiente_por:
         estado_final = EstadoOrden.pendiente
@@ -276,8 +387,23 @@ def procesar(
         motivo_final = motivo
 
     materiales = registrar_herramienta(
-        registro, correlation_id, "materiales", {}, tools._cargar_materiales
+        registro,
+        correlation_id,
+        "_cargar_materiales",
+        {"fuente": "_cargar_materiales"},
+        tools._cargar_materiales,
+        paso="materiales",
+        herramienta="materiales",
     )
+    if _corte(
+        "validar_orden_publicable:materiales",
+        paso="materiales",
+        herramienta="materiales",
+        argumentos={"fuente": "_cargar_materiales"},
+    ):
+        return _con_orden_por_control(
+            causas, orden, pendiente_por, (), (estado, motivo)
+        )
     hallazgos = medir_y_registrar(
         registro,
         correlation_id,
@@ -293,6 +419,8 @@ def procesar(
             estado_final = EstadoOrden.pendiente
         motivo_final = _sumar_problemas(motivo_final, hallazgos)
     problemas_revisor = tuple(dict.fromkeys(problema.codigo for problema in hallazgos))
+    if control.motivo_control == "LIMITE_TIEMPO":
+        problemas_revisor = tuple(dict.fromkeys((*problemas_revisor, "LIMITE_TIEMPO")))
 
     orden = orden.model_copy(update={"estado": estado_final, "motivo": motivo_final})
 

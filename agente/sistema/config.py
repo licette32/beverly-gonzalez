@@ -48,6 +48,10 @@ SENSORES_ANOMALIA_SPAN_MIN = float(os.getenv("SENSORES_ANOMALIA_SPAN_MIN", "10")
 
 MANUALES_TIMEOUT_S = float(os.getenv("MANUALES_TIMEOUT_S", "15"))
 MANUALES_TEXTO_MAX = int(os.getenv("MANUALES_TEXTO_MAX", "400"))
+FLUJO_LIMITE_S = float(os.getenv("FLUJO_LIMITE_S", "600"))
+REINTENTOS_TOOL_LECTURA = int(os.getenv("REINTENTOS_TOOL_LECTURA", "2"))
+ESPERA_REINTENTO_TOOL_S = float(os.getenv("ESPERA_REINTENTO_TOOL_S", "0.5"))
+UMBRAL_LOOP_PASOS = int(os.getenv("UMBRAL_LOOP_PASOS", "3"))
 MANUALES_TIPOS = frozenset({"manual_fabricante", "manual_operadora"})
 MANUALES_DOCS = frozenset({"TX350-D", "MBP-4", "FC48-3"})
 

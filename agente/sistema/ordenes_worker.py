@@ -8,22 +8,26 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from planta_contrato import EventoSistema, OrdenSistema
+from planta_contrato import EventoSistema, NotaRecorrida, OrdenSistema, Topicos
 
 from . import tools
 from .causas import EvidenciaEquipo
 from .catalogo import EstadoPlanta
+from .corte import mensaje_corte
 from .flujo import CatalogoFlujo, CatalogoTools, ResultadoFlujo
 from .flujo import procesar as procesar_flujo
 from .llm import AnalizadorLLM
 from .ordenes import ErrorEstadoEsperado, RepositorioOrdenes, publicar_orden
 from .repositorio_decisiones import (
+    MODELO_CONTROL,
     RegistroDecisiones,
     argumentos_historial_ordenes,
     medir_y_registrar,
+    registrar_directo,
     registrar_herramienta,
 )
 from .repositorio_ordenes import ErrorPersistenciaOrden
+from .tools import ErrorInfo
 
 log = logging.getLogger(__name__)
 
@@ -51,8 +55,22 @@ def _historial_por_equipo(
         argumentos_historial_ordenes(equipo),
         tools.historial_ordenes,
         equipo,
+        registro=registro,
+        correlation_id=correlation_id,
     )
     return list(respuesta.ordenes)
+
+
+def _nota_de_evento(evento: EventoSistema) -> NotaRecorrida:
+    nota_id = evento.nota_ids[0] if evento.nota_ids else evento.id
+    return NotaRecorrida(
+        id=nota_id,
+        ts=evento.ts,
+        operador="agente",
+        audio_url=None,
+        fotos=[],
+        recorrida_id=evento.id,
+    )
 
 
 class WorkerOrdenes(threading.Thread):
@@ -104,6 +122,21 @@ class WorkerOrdenes(threading.Thread):
                 if trabajo is None:
                     return
                 self._procesar_trabajo(trabajo)
+            except ErrorInfo as exc:
+                log.warning("corte por herramienta: %s %s", exc.codigo, exc.mensaje)
+                registrar_directo(
+                    self._registro,
+                    correlation_id=trabajo.evento.id,
+                    paso="tool_timeout",
+                    modelo=MODELO_CONTROL,
+                    herramienta=exc.codigo,
+                    argumentos={
+                        "resultado": "corte",
+                        "codigo": exc.codigo,
+                        "mensaje": exc.mensaje,
+                    },
+                )
+                self._avisar_corte(trabajo, "api")
             except Exception:
                 log.exception("falló la generación de orden")
             finally:
@@ -141,11 +174,21 @@ class WorkerOrdenes(threading.Thread):
             log.exception("no se pudo leer el estado de las bombas")
             return None
 
+    def _avisar_corte(self, trabajo: TrabajoOrden, motivo: str) -> None:
+        try:
+            self._publicador(
+                Topicos.TABLET, mensaje_corte(_nota_de_evento(trabajo.evento), motivo)
+            )
+        except Exception:
+            log.exception("no se pudo avisar el corte %s a la tablet", motivo)
+
     def _historial(self, equipo: str, correlation_id: str) -> Sequence[Any]:
         try:
             if self._historial_fn is not None:
                 return self._historial_fn(equipo)
             return _historial_por_equipo(equipo, correlation_id, self._registro)
+        except ErrorInfo:
+            raise
         except Exception:
             log.warning("no se pudo leer el historial de %s; se sigue sin reordenar", equipo)
             return []
@@ -171,6 +214,18 @@ class WorkerOrdenes(threading.Thread):
             **opciones,
         )
         log.info("diagnóstico evento=%s equipo=%s historial=%d causas=%s", evento.id, equipo, len(historial), [(c.codigo_falla, c.accion, c.tarea_codigo) for c in resultado.causas])
+        if "LIMITE_TIEMPO" in resultado.problemas:
+            if resultado.orden is not None:
+                try:
+                    self._repositorio.guardar(resultado.orden)
+                except Exception:
+                    log.exception(
+                        "no se pudo guardar la orden pendiente del evento %s",
+                        evento.id,
+                    )
+            log.warning("deadline alcanzado en el evento %s; no se publica", evento.id)
+            self._avisar_corte(trabajo, "deadline")
+            return
         if resultado.orden is None:
             log.info(
                 "sin orden para el evento %s: %s", evento.id, resultado.problemas

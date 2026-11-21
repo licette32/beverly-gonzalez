@@ -2,7 +2,7 @@ import time
 import unittest
 import uuid
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from planta_contrato import (
     EstadoOrden,
@@ -17,6 +17,7 @@ from sistema.anomalias_recientes import AlmacenAnomalias
 from sistema.causas import Anomalia, EvidenciaEquipo
 from sistema.config import POSTGRES_DSN
 from sistema.coordinador import CoordinadorPartes
+from sistema.flujo import ResultadoFlujo
 from sistema.ordenes import ErrorEstadoEsperado
 from sistema.ordenes_worker import WorkerOrdenes
 from sistema.parte import ItemParte
@@ -25,7 +26,7 @@ from sistema.repositorio_ordenes import (
     ErrorPersistenciaOrden,
     RepositorioOrdenesPostgres,
 )
-from sistema.tools import stock, tareas_catalogo
+from sistema.tools import ErrorInfo, stock, tareas_catalogo
 
 from test_catalogo import DATOS
 from sistema.catalogo import CatalogoPlanta
@@ -203,13 +204,14 @@ class TestWorkerOrdenes(unittest.TestCase):
             worker.detener()
             worker.join(timeout=2)
 
-    def _worker(self, repositorio, estado=None, historial=None):
+    def _worker(self, repositorio, estado=None, historial=None, procesar=None):
         worker = WorkerOrdenes(
             self.publicador,
             repositorio,
             catalogo=self.catalogo,
             estado_bombas=estado or (lambda: BOMBAS_CON_RESERVA),
             historial=historial or (lambda equipo: []),
+            procesar=procesar,
         )
         worker.start()
         self.workers.append(worker)
@@ -311,6 +313,41 @@ class TestWorkerOrdenes(unittest.TestCase):
         self.assertEqual(repositorio.intentos, 1)
         tiempo.sleep.assert_not_called()
         self.assertEqual(self.publicador.ordenes(), [])
+
+    def test_timeout_de_herramienta_avisa_tablet_y_no_reprocesa(self):
+        repositorio = RepositorioOrdenesFalso()
+        procesar = MagicMock(
+            side_effect=ErrorInfo("API_TIMEOUT", "historian lento", False)
+        )
+        worker = self._worker(repositorio, procesar=procesar)
+
+        worker.encolar(evento_nota(), evidencia_nota(), False)
+        esperar(lambda: len(self.publicador.publicados) == 1)
+        time.sleep(0.05)
+
+        self.assertEqual(self.publicador.ordenes(), [])
+        self.assertEqual(self.publicador.publicados[0][0], Topicos.TABLET)
+        self.assertEqual(procesar.call_count, 1)
+        self.assertEqual(repositorio.guardadas, [])
+
+    def test_deadline_guarda_orden_pendiente_sin_publicarla(self):
+        repositorio = RepositorioOrdenesFalso()
+        orden = orden_abierta(_id("deadline"), estado=EstadoOrden.pendiente)
+        procesar = MagicMock(
+            return_value=ResultadoFlujo(
+                [], orden, None, ("LIMITE_TIEMPO",), ("LIMITE_TIEMPO",)
+            )
+        )
+        worker = self._worker(repositorio, procesar=procesar)
+
+        worker.encolar(evento_nota(), evidencia_nota(), False)
+        esperar(lambda: len(self.publicador.publicados) == 1)
+        time.sleep(0.05)
+
+        self.assertEqual(repositorio.guardadas, [orden])
+        self.assertEqual(self.publicador.ordenes(), [])
+        self.assertEqual(self.publicador.publicados[0][0], Topicos.TABLET)
+        self.assertEqual(orden.estado, EstadoOrden.pendiente)
 
 
 @unittest.skipUnless(POSTGRES_DSN, "POSTGRES_DSN no configurado")
